@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-session-trash-host",
+  "name": "@deepseek-ai/dsh-session-recycle-bin-host",
   "description": "Session trash host plugin: extends session persistence, projection cache, and workspace registry with delete, unarchive, and permanent-delete capabilities for the DeepSeek Harness",
   "version": "0.1.0",
   "private": true,

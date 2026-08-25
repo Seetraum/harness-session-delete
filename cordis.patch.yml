@@ -1,4 +1,4 @@
-# Bundle patch for dsh-session-trash.
+# Bundle patch for dsh-session-recycle-bin.
 #
 # This is a top-level YAML array of loader patch entries — the format
 # `dsh` composes when it boots a profile: each bundle in
@@ -13,4 +13,4 @@
 # "./client", so dsh-client-modules serves that bundle into the browser.
 - insert:
     - id: session-trash
-      name: dsh-session-trash
+      name: dsh-session-recycle-bin

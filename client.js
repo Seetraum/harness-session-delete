@@ -24,7 +24,7 @@
  *   POST /api/session-trash/empty                       → purge all archived
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-session-trash',
+  id: 'dsh-session-recycle-bin',
   factory: (require) => {
     'use strict';
     const module = { exports: {} };
@@ -80,10 +80,10 @@ window.__ModuleLoader__.load({
     function showToastLayer(message, undoFn, actionText = '撤销') {
       if (typeof document === 'undefined') return;
 
-      let container = document.getElementById('dsh-session-trash-toast-container');
+      let container = document.getElementById('dsh-session-recycle-bin-toast-container');
       if (!container) {
         container = document.createElement('div');
-        container.id = 'dsh-session-trash-toast-container';
+        container.id = 'dsh-session-recycle-bin-toast-container';
         Object.assign(container.style, {
           position: 'fixed',
           bottom: '24px',
@@ -317,7 +317,7 @@ window.__ModuleLoader__.load({
           ctx?.emit?.('session/permanently-deleted', { id, sessionId: id });
 
           if (typeof document !== 'undefined') {
-            const btn = document.querySelector(`[data-dsh-session-trash-delete="${id}"]`);
+            const btn = document.querySelector(`[data-dsh-session-recycle-bin-delete="${id}"]`);
             if (btn) {
               const row = btn.closest('[role="treeitem"]') || btn.closest('li') || btn.closest('.dsh-trash-row');
               row?.remove();
@@ -543,7 +543,7 @@ window.__ModuleLoader__.load({
       if (rowStyleInjected || typeof document === 'undefined') return;
       rowStyleInjected = true;
       const tag = document.createElement('style');
-      tag.dataset.plugin = 'dsh-session-trash';
+      tag.dataset.plugin = 'dsh-session-recycle-bin';
       tag.textContent = [
         /* The icon is revealed on row hover, matching the stock "⋯" affordance. */
         '.dsh-trash-row-btn{',
@@ -568,7 +568,7 @@ window.__ModuleLoader__.load({
       ensureRowStyle();
       const index = buildTitleIndex(ctx);
       for (const row of document.querySelectorAll('[role="treeitem"]')) {
-        if (row.querySelector('[data-dsh-session-trash-delete]')) continue;
+        if (row.querySelector('[data-dsh-session-recycle-bin-delete]')) continue;
         const actionButton = [...row.querySelectorAll('button')].find(isSessionActionButton);
         if (!actionButton) continue;
         const title = sessionTitleFromLabel(actionButton.getAttribute('aria-label'));
