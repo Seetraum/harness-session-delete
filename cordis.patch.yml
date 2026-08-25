@@ -1,0 +1,16 @@
+# Bundle patch for dsh-session-trash.
+#
+# This is a top-level YAML array of loader patch entries — the format
+# `dsh` composes when it boots a profile: each bundle in
+# `dsh.profile.bundles` contributes its patch list, applied in bundle order
+# over the profile root (after dsh-base / dsh-web-app, before the profile's
+# own cordis.patch.yml).
+#
+# The single row mounts the bundle's node half as a host plugin (the row's
+# `name` is a bare package name resolved through the profile's node_modules).
+# The browser half joins the client module graph automatically: this
+# package's manifest declares `dsh.client` (platform: web) and exports
+# "./client", so dsh-client-modules serves that bundle into the browser.
+- insert:
+    - id: session-trash
+      name: dsh-session-trash

@@ -1,0 +1,26 @@
+{
+  "name": "@deepseek-ai/dsh-session-trash-host",
+  "description": "Session trash host plugin: extends session persistence, projection cache, and workspace registry with delete, unarchive, and permanent-delete capabilities for the DeepSeek Harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-session": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-session-persistence": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-session-projection-cache": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-workspace": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-storage-domain": "^0.1.1-rc.2"
+  }
+}
