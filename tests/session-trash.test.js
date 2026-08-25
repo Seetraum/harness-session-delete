@@ -159,4 +159,17 @@ describe('Session Trash Host Plugin Test Suite', () => {
     assert.ok(!state.archivedSessionIds.includes('ghost-sess'), 'ghost should be removed from archive set');
     assert.ok(!mockRegistry.entities.get('ws-1').record.sessionIds.includes('ghost-sess'), 'ghost should be detached from workspace');
   });
+
+  test('7. listArchivedSessions returns archived sessions with workspace info', async () => {
+    const items = await mockRegistry.listArchivedSessions();
+
+    assert.strictEqual(items.length, 2);
+    assert.strictEqual(items[0].sessionId, 'sess-1');
+    assert.strictEqual(items[0].title, 'Session 1');
+    assert.strictEqual(items[0].workspacePath, '/work/proj1');
+    assert.strictEqual(items[0].workspaceTitle, 'Proj 1');
+    assert.strictEqual(items[1].sessionId, 'sess-2');
+    // sess-2 is not accounted in any workspace record
+    assert.strictEqual(items[1].workspacePath, undefined);
+  });
 });
