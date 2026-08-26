@@ -579,7 +579,7 @@ window.__ModuleLoader__.load({
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'dsh-trash-row-btn';
-        button.dataset.dshSessionTrashDelete = sessionId;
+        button.dataset.dshSessionRecycleBinDelete = sessionId;
         button.title = '删除会话';
         button.setAttribute('aria-label', '删除会话');
         button.innerHTML = TRASH_ICON_SVG;
