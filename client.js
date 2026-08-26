@@ -568,14 +568,20 @@ window.__ModuleLoader__.load({
       ensureRowStyle();
       const index = buildTitleIndex(ctx);
       for (const row of document.querySelectorAll('[role="treeitem"]')) {
-        if (row.querySelector('[data-dsh-session-recycle-bin-delete]')) continue;
-        const actionButton = [...row.querySelectorAll('button')].find(isSessionActionButton);
-        if (!actionButton) continue;
+        if (row.dataset.dshTrashInjected === 'true') continue;
+        const actionButtons = [...row.querySelectorAll('button')].filter(isSessionActionButton);
+        if (actionButtons.length !== 1) continue; // skip parent container rows with multiple buttons
+        const actionButton = actionButtons[0];
+        if (actionButton.parentNode?.querySelector('.dsh-trash-row-btn')) {
+          row.dataset.dshTrashInjected = 'true';
+          continue;
+        }
         const title = sessionTitleFromLabel(actionButton.getAttribute('aria-label'));
         if (!title) continue;
         const ids = index.get(title);
         if (!ids || ids.length !== 1) continue; // ambiguous title → skip
         const sessionId = ids[0];
+        row.dataset.dshTrashInjected = 'true';
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'dsh-trash-row-btn';
@@ -596,9 +602,7 @@ window.__ModuleLoader__.load({
           }
         });
         row.classList.add('dsh-trash-row');
-        // Insert directly before the title span (after the status dots).
-        const titleSpan = [...row.children].find((child) => child.textContent === title);
-        row.insertBefore(button, titleSpan ?? row.firstChild);
+        actionButton.parentNode.insertBefore(button, actionButton);
       }
     }
 
