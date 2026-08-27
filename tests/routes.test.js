@@ -44,8 +44,10 @@ describe('Session Trash Host HTTP Routes', () => {
     return route.handler;
   }
 
+  let tempDir;
+
   beforeEach(async () => {
-    const tempDir = join(process.cwd(), '.tmp', `dsh-routes-test-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+    tempDir = join(process.cwd(), '.tmp', `dsh-routes-test-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
     await mkdir(tempDir, { recursive: true });
 
     const mockPersistence = {
@@ -112,13 +114,21 @@ describe('Session Trash Host HTTP Routes', () => {
     await plugin[Symbol.for('cordis.init')]();
   });
 
+  afterEach(async () => {
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
   test('registers all /api/session-trash/* routes', () => {
     const paths = routes.map((r) => r.path).sort();
     assert.deepStrictEqual(paths, [
       '/api/session-trash/archive',
       '/api/session-trash/empty',
       '/api/session-trash/list',
+      '/api/session-trash/messages',
       '/api/session-trash/purge',
+      '/api/session-trash/purge-workspace',
       '/api/session-trash/sessions',
       '/api/session-trash/unarchive',
     ]);
@@ -212,6 +222,26 @@ describe('Session Trash Host HTTP Routes', () => {
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.body.data.deletedCount, 1);
     assert.deepStrictEqual(mockCtx.workspaceRegistry.requireState().archivedSessionIds, []);
+  });
+
+  test('GET /messages retrieves session logs', async () => {
+    const res = jsonResponse();
+    const req = request('GET');
+    req.url = '/api/session-trash/messages?sessionId=sess-1';
+    await handlerFor('/api/session-trash/messages')(req, res);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.ok, true);
+    assert.strictEqual(res.body.data.sessionId, 'sess-1');
+  });
+
+  test('POST /purge-workspace purges sessions in a workspace', async () => {
+    const res = jsonResponse();
+    await handlerFor('/api/session-trash/purge-workspace')(
+      request('POST', { workspacePath: '/work/proj1', sessionIds: ['sess-1'] }, { 'x-dsh-plugin': 'session-trash' }),
+      res
+    );
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.data.deletedCount, 1);
   });
 
   test('non-GET without the plugin header is rejected (CSRF seam)', async () => {

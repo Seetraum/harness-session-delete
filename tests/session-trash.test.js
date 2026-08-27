@@ -104,6 +104,12 @@ describe('Session Trash Host Plugin Test Suite', () => {
     }
   });
 
+  afterEach(async () => {
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
   test('1. SessionProjectionCache.remove - Fail-Soft Behavior', async () => {
     await mockCache.remove('sess-1');
 
@@ -160,7 +166,7 @@ describe('Session Trash Host Plugin Test Suite', () => {
     assert.ok(!mockRegistry.entities.get('ws-1').record.sessionIds.includes('ghost-sess'), 'ghost should be detached from workspace');
   });
 
-  test('7. listArchivedSessions returns archived sessions with workspace info', async () => {
+  test('7. listArchivedSessions returns archived sessions with workspace info and metadata', async () => {
     const items = await mockRegistry.listArchivedSessions();
 
     assert.strictEqual(items.length, 2);
@@ -168,6 +174,8 @@ describe('Session Trash Host Plugin Test Suite', () => {
     assert.strictEqual(items[0].title, 'Session 1');
     assert.strictEqual(items[0].workspacePath, '/work/proj1');
     assert.strictEqual(items[0].workspaceTitle, 'Proj 1');
+    assert.ok(typeof items[0].archivedAt === 'number');
+    assert.ok(typeof items[0].fileSize === 'number');
     assert.strictEqual(items[1].sessionId, 'sess-2');
     // sess-2 is not accounted in any workspace record
     assert.strictEqual(items[1].workspacePath, undefined);

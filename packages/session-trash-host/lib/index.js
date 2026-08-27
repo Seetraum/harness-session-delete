@@ -15,7 +15,7 @@
  * This plugin patches the existing services at init time. It is designed
  * to be loaded via cordis.patch.yml and works with the compiled DSH packages.
  */
-import { rm, readdir, rmdir, stat } from 'node:fs/promises';
+import { rm, readdir, rmdir, stat, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 // Robust Service base class fallback for standalone testing environment
@@ -134,6 +134,27 @@ function patchWorkspaceRegistry(registry, ctx) {
       return registry.enqueueOperation(fn);
     }
     return fn();
+  };
+
+  // ── archiveSession ────────────────────────────────────────────────
+  registry.archiveSession = function archiveSession(sessionId, title) {
+    return runInQueue(async () => {
+      const state = registry.requireState?.();
+      if (!state) return;
+      const currentArchived = state.archivedSessionIds ?? [];
+      const currentTitles = state.archivedTitles ?? {};
+      if (!currentArchived.includes(sessionId)) {
+        const newArchived = [...currentArchived, sessionId];
+        const newTitles = { ...currentTitles };
+        if (title) newTitles[sessionId] = title;
+        await registry.setState({
+          ...state,
+          archivedSessionIds: newArchived,
+          archivedTitles: newTitles,
+        });
+        notifyArchivedSessionsChanged(ctx, newArchived);
+      }
+    });
   };
 
   // ── unarchiveSession ──────────────────────────────────────────────
@@ -284,6 +305,34 @@ function patchWorkspaceRegistry(registry, ctx) {
     const archivedIds = state.archivedSessionIds ?? [];
     if (archivedIds.length === 0) return [];
 
+    /** 提取用户消息中的真实对话内容，过滤掉系统上下文、skills 等注入内容 */
+    function extractUserText(raw) {
+      if (!raw) return '';
+      // content 是 ContentBlock[]，每个 block 有 type 和 text 字段
+      if (Array.isArray(raw)) {
+        return raw
+          .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
+          .map((part) => part.text)
+          .filter(Boolean)
+          .join('\n')
+          .trim();
+      }
+      if (typeof raw !== 'string') return '';
+      let str = raw;
+      // 提取 <USER_REQUEST> 内的内容（用户真实输入）
+      const userReqMatch = str.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/i);
+      if (userReqMatch) return userReqMatch[1].trim();
+      // 去掉已知的 XML 标签
+      str = str.replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/gi, '');
+      str = str.replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/gi, '');
+      str = str.replace(/<SKILL>[\s\S]*?<\/SKILL>/gi, '');
+      str = str.replace(/<SYSTEM_CONTEXT>[\s\S]*?<\/SYSTEM_CONTEXT>/gi, '');
+      str = str.replace(/<WORKSPACE>[\s\S]*?<\/WORKSPACE>/gi, '');
+      // 去掉所有剩余的 HTML/XML 标签
+      str = str.replace(/<[^>]+>/g, '');
+      return str.trim();
+    }
+
     let headers = [];
     try {
       headers = (await ctx.sessionPersistence?.list?.()) ?? [];
@@ -308,17 +357,90 @@ function patchWorkspaceRegistry(registry, ctx) {
       }
     }
 
-    return archivedIds.map((sessionId) => {
-      const header = byId.get(sessionId);
-      const ws = workspaceBySession.get(sessionId);
-      return {
-        sessionId,
-        title: header?.title ?? String(sessionId),
-        cwd: header?.cwd,
-        workspacePath: ws?.workspacePath,
-        workspaceTitle: ws?.workspaceTitle,
-      };
-    });
+    const items = await Promise.all(
+      archivedIds.map(async (sessionId) => {
+        const header = byId.get(sessionId);
+        const ws = workspaceBySession.get(sessionId);
+
+        let archivedAt = Date.now();
+        let fileSize = 0;
+        let turnCount = 0;
+        let derivedTitle = '';
+
+        try {
+          const persistence = ctx.sessionPersistence;
+          const logPath = typeof persistence?.findLog === 'function' ? await persistence.findLog(sessionId) : undefined;
+          if (logPath) {
+            const fileStat = await stat(logPath).catch(() => null);
+            if (fileStat) {
+              archivedAt = fileStat.mtimeMs;
+              fileSize = fileStat.size;
+            }
+          }
+          // 使用 persistence.inspect() 读取已解压的会话事件（DSH 默认启用 Zstd 压缩，
+          // 直接 readFile 读到的是二进制数据，无法解析为 JSON）。
+          const stored = await persistence?.inspect?.(sessionId).catch(() => undefined);
+          if (stored && Array.isArray(stored.events)) {
+            const events = stored.events;
+            // 统计 turn/start 事件数量作为真实对话轮数
+            turnCount = events.filter((e) => e.type === 'turn/start').length;
+            // 提取第一条真实用户消息作为衍生标题（过滤掉系统上下文等非用户输入）
+            const firstUserMsg = events.find((e) => e.type === 'user/message' && e.data?.source?.kind === 'user');
+            if (firstUserMsg?.data?.content) {
+              const text = extractUserText(firstUserMsg.data.content);
+              if (text) {
+                derivedTitle = text.split('\n')[0].substring(0, 50);
+              }
+            }
+          }
+        } catch {
+          // best effort fallback
+        }
+
+        const savedTitle = state?.archivedTitles?.[sessionId];
+        const finalTitle = savedTitle || ((header?.title && header.title !== sessionId)
+          ? header.title
+          : (derivedTitle || (header?.title ? header.title : '未命名会话')));
+
+        return {
+          sessionId,
+          title: finalTitle,
+          cwd: header?.cwd,
+          workspacePath: ws?.workspacePath || ws?.cwd,
+          workspaceTitle: ws?.workspaceTitle,
+          archivedAt,
+          fileSize,
+          turnCount,
+        };
+      })
+    );
+
+    // 按工作区顺序排列（与左侧 sidebar 一致），每个工作区内按时间降序排列
+    const workspaceOrder = [];
+    const workspaceGrouped = new Map();
+    if (entities) {
+      for (const entity of entities.values()) {
+        const path = entity.record.path;
+        workspaceOrder.push(path);
+        workspaceGrouped.set(path, { path, title: entity.record.title, items: [] });
+      }
+    }
+    for (const item of items) {
+      const key = item.workspacePath || item.cwd || '其他工作区';
+      if (!workspaceGrouped.has(key)) {
+        workspaceGrouped.set(key, { path: key, title: item.workspaceTitle || '其他项目', items: [] });
+        workspaceOrder.push(key);
+      }
+      workspaceGrouped.get(key).items.push(item);
+    }
+    const ordered = [];
+    for (const path of workspaceOrder) {
+      const group = workspaceGrouped.get(path);
+      if (!group || group.items.length === 0) continue;
+      group.items.sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0));
+      ordered.push(...group.items);
+    }
+    return ordered;
   };
 }
 
@@ -470,20 +592,20 @@ function registerRoutes(ctx) {
         ok(res, { items: await allSessions() });
       }),
     },
-    // POST archive { sessionId } — move one session into the recycle bin.
+    // POST archive { sessionId, title } — move one session into the recycle bin.
     {
       kind: 'exact',
       path: `${ROUTE_PREFIX}/archive`,
       handler: guard(async (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: { code: 'METHOD', message: 'POST only' } });
-        const { sessionId } = await readBody(req);
+        const { sessionId, title } = await readBody(req);
         if (!sessionId) throw httpError(400, 'BAD_REQUEST', 'sessionId is required');
         const agents = ctx.get('agents');
         const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined;
         if (agent !== undefined && agent.status !== 'idle') {
           throw httpError(400, 'SESSION_RUNNING', '会话正在运行中，无法删除');
         }
-        await registry?.archiveSession?.(sessionId);
+        await registry?.archiveSession?.(sessionId, title);
         ok(res, { sessionId, archivedSessionIds: broadcastArchived() });
       }),
     },
@@ -520,6 +642,271 @@ function registerRoutes(ctx) {
         }
         if (deleted.length > 0) broadcastArchived();
         ok(res, { deletedCount: deleted.length, total: ids.length, errors });
+      }),
+    },
+    // GET messages — read and parse messages for session preview modal.
+    {
+      kind: 'exact',
+      path: `${ROUTE_PREFIX}/messages`,
+      handler: guard(async (req, res) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: { code: 'METHOD', message: 'GET only' } });
+        if (!req.url) throw httpError(400, 'BAD_REQUEST', 'missing request URL');
+        const url = new URL(req.url, 'http://localhost');
+        const sessionId = url.searchParams.get('sessionId');
+        if (!sessionId) throw httpError(400, 'BAD_REQUEST', 'sessionId is required');
+
+        const persistence = ctx.sessionPersistence;
+        const logPath = typeof persistence?.findLog === 'function' ? await persistence.findLog(sessionId) : undefined;
+        const messages = [];
+
+        /** 提取用户消息中的真实对话内容，过滤掉系统上下文、skills 等注入内容 */
+        function extractUserText(raw) {
+          if (!raw) return '';
+          // content 是 ContentBlock[]，每个 block 有 type 和 text 字段
+          if (Array.isArray(raw)) {
+            return raw
+              .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
+              .map((part) => part.text)
+              .filter(Boolean)
+              .join('\n')
+              .trim();
+          }
+          if (typeof raw !== 'string') return '';
+          let str = raw;
+          // 优先提取 <USER_REQUEST> 内的内容（用户真实输入）
+          const userReqMatch = str.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/i);
+          if (userReqMatch) return userReqMatch[1].trim();
+          // 去掉已知的 XML 标签
+          str = str.replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/gi, '');
+          str = str.replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/gi, '');
+          str = str.replace(/<SKILL>[\s\S]*?<\/SKILL>/gi, '');
+          str = str.replace(/<SYSTEM_CONTEXT>[\s\S]*?<\/SYSTEM_CONTEXT>/gi, '');
+          str = str.replace(/<WORKSPACE>[\s\S]*?<\/WORKSPACE>/gi, '');
+          // 去掉所有剩余的 HTML/XML 标签
+          str = str.replace(/<[^>]+>/g, '');
+          return str.trim();
+        }
+
+        /** 提取助手消息中的真实回复内容，过滤掉 reasoning 思考块、tool-call 等 */
+        function extractAssistantText(content) {
+          if (!content) return '';
+          // content 是 ContentBlock[]，过滤出 type 为 'text' 的块（排除 reasoning/tool-call/tool-result）
+          if (Array.isArray(content)) {
+            return content
+              .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
+              .map((part) => part.text)
+              .filter(Boolean)
+              .join('\n')
+              .trim();
+          }
+          // 内容为字符串：去掉 thinking 块（兼容旧格式）
+          if (typeof content === 'string') {
+            let str = content;
+            str = str.replace(/```thinking[\s\S]*?```/g, '');
+            str = str.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '');
+            return str.trim();
+          }
+          return '';
+        }
+
+        function parseRole(obj) {
+          if (!obj) return null;
+          const raw = String(obj.role || obj.type || obj.kind || obj.event || '').toUpperCase();
+          if (raw.includes('USER') || raw.includes('HUMAN') || raw.includes('INPUT')) return 'user';
+          if (raw.includes('ASSISTANT') || raw.includes('PLANNER') || raw.includes('RESPONSE') || raw.includes('MODEL') || raw.includes('AGENT') || raw.includes('OUTPUT')) return 'assistant';
+          return null;
+        }
+
+        function cleanText(raw) {
+          if (typeof raw !== 'string') return '';
+          let str = raw;
+          str = str.replace(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/gi, '$1');
+          str = str.replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/gi, '');
+          str = str.replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/gi, '');
+          return str.trim();
+        }
+
+        function extractAnyText(val) {
+          if (!val) return '';
+          if (typeof val === 'string') return cleanText(val);
+          if (Array.isArray(val)) {
+            return val.map(extractAnyText).filter(Boolean).join('\n');
+          }
+          if (typeof val === 'object') {
+            if (typeof val.text === 'string') return cleanText(val.text);
+            if (val.content) return extractAnyText(val.content);
+            if (typeof val.value === 'string') return cleanText(val.value);
+            if (typeof val.prompt === 'string') return cleanText(val.prompt);
+            if (typeof val.message === 'string') return cleanText(val.message);
+            if (val.payload) return extractAnyText(val.payload);
+            if (val.data) return extractAnyText(val.data);
+          }
+          return '';
+        }
+
+        function parseContent(obj) {
+          if (!obj) return '';
+          return extractAnyText(obj.content ?? obj.text ?? obj.prompt ?? obj.message ?? obj.query ?? obj.payload ?? obj);
+        }
+
+        // 优先使用 persistence.inspect() 读取已解压的会话事件
+        // （DSH 默认启用 Zstd 压缩，直接 readFile 读到的是二进制数据）。
+        try {
+          const stored = await persistence?.inspect?.(sessionId).catch(() => undefined);
+          if (stored && Array.isArray(stored.events)) {
+            for (const event of stored.events) {
+              if (event.type === 'user/message') {
+                // 只保留 source.kind === 'user' 的真实用户输入，
+                // 排除 plugin 注入的上下文（skills、系统上下文、工具结果等）
+                const sourceKind = event.data?.source?.kind;
+                if (sourceKind && sourceKind !== 'user') continue;
+                // 用户消息：提取 ContentBlock[] 中的 text 块，过滤掉系统上下文
+                const content = extractUserText(event.data?.content);
+                if (content) {
+                  messages.push({
+                    role: 'user',
+                    content,
+                    timestamp: event.createdAt || Date.now(),
+                  });
+                }
+              } else if (event.type === 'assistant/message') {
+                // 助手消息：只取 text 块，过滤掉 reasoning 思考块、tool-call 等
+                const content = extractAssistantText(event.data?.message?.content);
+                if (content) {
+                  messages.push({
+                    role: 'assistant',
+                    content,
+                    timestamp: event.createdAt || Date.now(),
+                  });
+                }
+              }
+            }
+          }
+        } catch {
+          // inspect 失败后回退到直接读取日志文件（兼容未压缩的日志）
+        }
+
+        // 回退方案：直接读取日志文件（仅当 inspect 未返回任何消息时）
+        if (messages.length === 0) {
+          // 广谱搜寻日志文件路径（兼容活跃日志、回收站归档日志及 profiles 目录）
+          let resolvedLogPath = logPath;
+          if (!resolvedLogPath && typeof persistence?.locate === 'function') {
+            try {
+              const loc = persistence.locate({ id: sessionId });
+              resolvedLogPath = loc?.path || loc;
+            } catch {}
+          }
+
+          if (!resolvedLogPath) {
+            const home = process.env.HOME || process.env.USERPROFILE || '';
+            const candidates = [
+              join(home, '.dsh', 'profiles', 'web', 'trash', `${sessionId}.jsonl`),
+              join(home, '.dsh', 'profiles', 'default', 'trash', `${sessionId}.jsonl`),
+              join(home, '.dsh', 'trash', `${sessionId}.jsonl`),
+              join(home, '.dsh', 'logs', `${sessionId}.jsonl`),
+              join(process.cwd(), 'trash', `${sessionId}.jsonl`),
+            ];
+            for (const p of candidates) {
+              if (!p) continue;
+              const exists = await stat(p).then((s) => s.isFile()).catch(() => false);
+              if (exists) {
+                resolvedLogPath = p;
+                break;
+              }
+            }
+          }
+
+          if (resolvedLogPath) {
+            try {
+              const content = await readFile(resolvedLogPath, 'utf8');
+              const lines = content.split('\n');
+              for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                  const obj = JSON.parse(line);
+                  const typeStr = String(obj.type || '').toUpperCase();
+                  if (typeStr.includes('SETTINGS') || typeStr.includes('NOTIFICATION')) continue;
+
+                  const role = parseRole(obj);
+                  const text = parseContent(obj);
+                  if (role && text) {
+                    messages.push({
+                      role,
+                      content: text,
+                      timestamp: obj.timestamp || obj.time || obj.created_at || Date.now(),
+                    });
+                  } else if (Array.isArray(obj.messages)) {
+                    for (const m of obj.messages) {
+                      const r = parseRole(m);
+                      const t = parseContent(m);
+                      if (r && t) {
+                        messages.push({
+                          role: r,
+                          content: t,
+                          timestamp: m.timestamp || m.time || Date.now(),
+                        });
+                      }
+                    }
+                  }
+                } catch {}
+              }
+              // Fallback: 如果广谱识别未匹配到 user/assistant
+              if (messages.length === 0) {
+                for (const line of lines) {
+                  if (!line.trim()) continue;
+                  try {
+                    const obj = JSON.parse(line);
+                    const typeStr = String(obj.type || '').toUpperCase();
+                    if (typeStr.includes('SETTINGS') || typeStr.includes('NOTIFICATION')) continue;
+                    const text = parseContent(obj);
+                    if (text) {
+                      messages.push({
+                        role: String(obj.type || obj.role || 'system').toUpperCase().includes('USER') ? 'user' : 'assistant',
+                        content: text,
+                        timestamp: obj.timestamp || obj.time || Date.now(),
+                      });
+                    }
+                  } catch {}
+                }
+              }
+            } catch {}
+          }
+        }
+
+        ok(res, { sessionId, messages });
+      }),
+    },
+    // POST purge-workspace { workspacePath, sessionIds? } — permanently delete all archived sessions in a workspace.
+    {
+      kind: 'exact',
+      path: `${ROUTE_PREFIX}/purge-workspace`,
+      handler: guard(async (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: { code: 'METHOD', message: 'POST only' } });
+        const { workspacePath, sessionIds } = await readBody(req);
+        let targetIds = Array.isArray(sessionIds) ? sessionIds : [];
+
+        if (targetIds.length === 0 && workspacePath) {
+          const archived = (await registry?.listArchivedSessions?.()) ?? [];
+          targetIds = archived.filter((item) => item.workspacePath === workspacePath || item.cwd === workspacePath).map((item) => item.sessionId);
+        }
+
+        if (targetIds.length === 0) {
+          return ok(res, { deletedCount: 0, total: 0, errors: [] });
+        }
+
+        const deleted = [];
+        const errors = [];
+        for (const sessionId of targetIds) {
+          try {
+            await registry?.permanentlyDeleteSession?.(sessionId);
+            deleted.push(sessionId);
+          } catch (error) {
+            errors.push({ sessionId, code: error?.code ?? 'ERROR', message: error?.message ?? String(error) });
+          }
+        }
+
+        if (deleted.length > 0) broadcastArchived();
+        ok(res, { deletedCount: deleted.length, total: targetIds.length, errors });
       }),
     },
     // POST empty — permanently delete every archived session.
