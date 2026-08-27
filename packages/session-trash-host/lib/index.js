@@ -159,7 +159,9 @@ function patchWorkspaceRegistry(registry, ctx) {
     const agents = ctx.get('agents');
     const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined;
     if (agent !== undefined && agent.status !== 'idle') {
-      throw new Error(`cannot permanently delete session '${sessionId}': session is currently running`);
+      const err = new Error(`会话正在运行中，请等待结束后再删除`);
+      err.code = 'SESSION_RUNNING';
+      throw err;
     }
 
     // Physical deletion via `findLog`: scans ALL project directories directly,
@@ -476,6 +478,11 @@ function registerRoutes(ctx) {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: { code: 'METHOD', message: 'POST only' } });
         const { sessionId } = await readBody(req);
         if (!sessionId) throw httpError(400, 'BAD_REQUEST', 'sessionId is required');
+        const agents = ctx.get('agents');
+        const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined;
+        if (agent !== undefined && agent.status !== 'idle') {
+          throw httpError(400, 'SESSION_RUNNING', '会话正在运行中，无法删除');
+        }
         await registry?.archiveSession?.(sessionId);
         ok(res, { sessionId, archivedSessionIds: broadcastArchived() });
       }),

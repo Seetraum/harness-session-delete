@@ -290,7 +290,7 @@ window.__ModuleLoader__.load({
             }
           });
         } catch (err) {
-          alert(`恢复失败: ${err.message}`);
+          showToastLayer(`恢复失败: ${err.message}`);
         }
       };
 
@@ -333,17 +333,25 @@ window.__ModuleLoader__.load({
       const handlePurge = async (ids) => {
         try {
           const result = await api(ctx, `${API_PREFIX}/purge`, { method: 'POST', body: { sessionIds: ids } });
-          purgeFromBrowserSessionStore(ctx, ids);
+          const failedIds = new Set((result?.errors ?? []).map((e) => e.sessionId));
+          const succeededIds = ids.filter((id) => !failedIds.has(id));
+          purgeFromBrowserSessionStore(ctx, succeededIds);
           clearSelection();
           setConfirmModal(null);
           loadItems();
           if (result?.errors?.length > 0) {
-            showToastLayer(`已彻底删除 ${result.deletedCount} 个，${result.errors.length} 个失败`);
+            const hasRunning = result.errors.some((e) => e.code === 'SESSION_RUNNING' || e.message?.includes('运行中'));
+            if (hasRunning) {
+              showToastLayer(`无法彻底删除：存在正在运行中的会话，请等待结束后再试`);
+            } else {
+              showToastLayer(`已彻底删除 ${result.deletedCount} 个，${result.errors.length} 个失败`);
+            }
           } else {
             showToastLayer(`已彻底删除 ${result?.deletedCount ?? ids.length} 个会话`);
           }
         } catch (err) {
-          alert(`删除失败: ${err.message}`);
+          const msg = err.code === 'SESSION_RUNNING' ? '无法彻底删除：会话正在运行中，请等待结束后再试' : `删除失败: ${err.message}`;
+          showToastLayer(msg);
         }
       };
 
@@ -487,7 +495,8 @@ window.__ModuleLoader__.load({
                 });
               }
             } catch (err) {
-              alert(`${actionTitle}失败: ${err.message}`);
+              const msg = err.code === 'SESSION_RUNNING' ? '无法删除：会话正在运行中，请等待结束后再删除' : `${actionTitle}失败: ${err.message}`;
+              showToastLayer(msg);
             }
           },
         }
@@ -592,7 +601,8 @@ window.__ModuleLoader__.load({
               await api(ctx, `${API_PREFIX}/unarchive`, { method: 'POST', body: { sessionId } });
             });
           } catch (err) {
-            alert(`删除会话失败: ${err.message}`);
+            const msg = err.code === 'SESSION_RUNNING' ? '无法删除：会话正在运行中，请等待结束后再删除' : `删除会话失败: ${err.message}`;
+            showToastLayer(msg);
           }
         });
         row.classList.add('dsh-trash-row');
