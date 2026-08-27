@@ -157,6 +157,23 @@ describe('Session Trash Host HTTP Routes', () => {
     assert.deepStrictEqual(mockCtx.workspaceRegistry.requireState().archivedSessionIds, ['sess-1', 'sess-3']);
   });
 
+  test('POST /archive rejects a running session with SESSION_RUNNING', async () => {
+    mockCtx.get = (key) =>
+      key === 'agents'
+        ? { get: (id) => (id === 'sess-running' ? { status: 'running' } : undefined) }
+        : key === 'sessionProjectionCache'
+        ? mockCtx.sessionProjectionCache
+        : undefined;
+    const res = jsonResponse();
+    await handlerFor('/api/session-trash/archive')(
+      request('POST', { sessionId: 'sess-running' }, { 'x-dsh-plugin': 'session-trash' }),
+      res
+    );
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.ok, false);
+    assert.strictEqual(res.body.error.code, 'SESSION_RUNNING');
+  });
+
   test('POST /unarchive restores a session', async () => {
     const res = jsonResponse();
     await handlerFor('/api/session-trash/unarchive')(

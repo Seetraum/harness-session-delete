@@ -124,7 +124,7 @@ describe('Session Trash Host Plugin Test Suite', () => {
       async () => {
         await mockRegistry.permanentlyDeleteSession('sess-active');
       },
-      { message: /cannot permanently delete session 'sess-active': session is currently running/ }
+      { message: /会话正在运行中，请等待结束后再删除/ }
     );
   });
 
