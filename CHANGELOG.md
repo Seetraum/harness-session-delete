@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+[English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
+
+## [0.2.2] - 2026-09-01
+
+### Fixed
+
+- **Sidebar hover delete button missing on newly created sessions**: the injected button on a blank "New Session" row was placed at the row start and removed by React re-renders, leaving a stuck "injected" marker with no button. The button is now inserted between the status slot and the title (same position as normal rows), and a self-heal pass re-injects rows whose marker exists but button was lost.
+- **Duplicate-titled sessions could not be deleted** (e.g. several "你好"): the browser session store keeps archived sessions in `byId`, so a single live session titled "你好" was never unique. Archived sessions are now excluded via `workspaces` `archivedSessionIds` before matching; with one live match left, the row binds directly.
+- **Multiple live duplicate-titled rows**: the selected row binds to the current session; other rows are disambiguated by list recency position, gated by a relative-time monotonicity check — when the order cannot be confirmed the row stays aligned (invisible spacer) and shows no button, avoiding a wrong delete.
+- **Test suite could not run** (`afterEach`/`rm` were used but not imported in `tests/*.test.js`) — imports fixed so `npm test` executes all 18 host tests.
+
+### Changed
+
+- Sidebar rows whose session id cannot be safely resolved keep a same-width invisible spacer, so all rows align (no more "shifted left" rows).
+
 ## [0.2.1] - 2026-08-27
 
 ### Fixed

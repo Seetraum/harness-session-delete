@@ -1065,24 +1065,108 @@ window.__ModuleLoader__.load({
         '  cursor:pointer;border-radius:4px;opacity:0;transition:opacity .12s ease,color .12s ease,background .12s ease;',
         '  color:var(--dsw-alias-label-tertiary,#a0aec0);margin-right:4px;',
         '}',
-        '.dsh-trash-row:hover .dsh-trash-row-btn,',
-        '[role="treeitem"]:hover .dsh-trash-row-btn,',
-        '.dsh-session-item:hover .dsh-trash-row-btn,',
-        'a[href*="/session/"]:hover .dsh-trash-row-btn{opacity:.85;}',
-        '.dsh-trash-row-btn:hover{opacity:1;color:#e53e3e;background:rgba(0,0,0,.06);}',
+        /* 占位按钮：等宽隐形，保持无法解析 ID 的会话行与其它行布局一致（防止"往左靠"） */
+        '.dsh-trash-row-btn--spacer{',
+        '  pointer-events:none;cursor:default;opacity:0 !important;',
+        '}',
+        '.dsh-trash-row:hover .dsh-trash-row-btn:not(.dsh-trash-row-btn--spacer),',
+        '[role="treeitem"]:hover .dsh-trash-row-btn:not(.dsh-trash-row-btn--spacer),',
+        '.dsh-session-item:hover .dsh-trash-row-btn:not(.dsh-trash-row-btn--spacer),',
+        'a[href*="/session/"]:hover .dsh-trash-row-btn:not(.dsh-trash-row-btn--spacer){opacity:.85;}',
+        '.dsh-trash-row-btn:not(.dsh-trash-row-btn--spacer):hover{opacity:1;color:#e53e3e;background:rgba(0,0,0,.06);}',
         '.dsh-trash-row-btn svg{display:block;}',
       ].join('\n');
       document.head.appendChild(tag);
+    }
+
+    /** 解析相对时间标签为"新→旧"的数值等级（越小越新）；解析失败返回 null */
+    function timeAgeRank(label) {
+      const s = String(label || '').trim();
+      if (s === 'now' || s === '刚刚') return 0;
+      let m = s.match(/^(\d+)\s*(min|h|d)$/);
+      if (m) return { min: 1, h: 60, d: 1440 }[m[2]] * Number(m[1]);
+      m = s.match(/^(\d+)\s*(分钟|小时|天)$/);
+      if (m) return { 分钟: 1, 小时: 60, 天: 1440 }[m[2]] * Number(m[1]);
+      return null;
+    }
+
+    /** 提取一行的时间标签文本（class 是哈希值，用文本模式识别） */
+    function timeLabelOf(row) {
+      for (const child of row.children) {
+        const text = String(child?.textContent ?? '').trim();
+        if (/^(刚刚|now|\d+\s*(min|h|d|分钟|小时|天))$/.test(text)) return text;
+      }
+      return '';
+    }
+
+    /** 收集同一列表作用域（组/平铺列表）内按 DOM 顺序排列的所有会话行 */
+    function siblingSessionRows(row) {
+      const scope = row.parentElement?.parentElement ?? row.parentElement ?? row;
+      try {
+        return [...scope.querySelectorAll('div[role="treeitem"]:not([aria-expanded])')];
+      } catch {
+        return [];
+      }
+    }
+
+    /** 把按钮/占位按钮插到行内标题前（与标题同排，保证所有行占位一致） */
+    function insertButtonIntoRow(row, el, title) {
+      let anchor = null;
+      if (title) {
+        anchor = [...row.children].find((child) => child.textContent === title || child.textContent?.includes(title));
+      }
+      if (!anchor) {
+        // 标题为空（空白会话行）：标题 span 是最后一个元素子节点（children: [slot, title]），
+        // 插到它前面 → [slot, button, title]，与正常行位置一致，避免被 React 重渲染移除。
+        const elements = [...row.children].filter((c) => c.nodeType === 1);
+        anchor = elements[elements.length - 1] ?? null;
+      }
+      if (anchor) {
+        row.insertBefore(el, anchor);
+      } else if (row.firstElementChild) {
+        row.insertBefore(el, row.firstElementChild);
+      } else {
+        row.prepend(el);
+      }
+    }
+
+    /** 无法解析会话 ID 时插入等宽隐形占位按钮：行布局与其它行保持一致，不再"往左靠" */
+    function injectSpacerButton(row, title) {
+      const spacer = document.createElement('button');
+      spacer.type = 'button';
+      spacer.className = 'dsh-trash-row-btn dsh-trash-row-btn--spacer';
+      spacer.setAttribute('aria-hidden', 'true');
+      spacer.tabIndex = -1;
+      row.dataset.dshTrashSpacer = 'true';
+      insertButtonIntoRow(row, spacer, title);
     }
 
     /** Inject per-row delete icon into left sidebar session tree */
     function injectRowDelete(ctx) {
       ensureRowStyle();
       if (typeof document === 'undefined') return;
+      const snapshot = ctx?.sessions?.list?.getSnapshot?.() ?? {};
+      const byId = snapshot.byId ?? {};
       const titleIndex = buildTitleIndex(ctx);
+      // 归档集合：sessions 列表快照未携带，但 workspaces 快照携带（同步可用）。
+      const archived = new Set(
+        (ctx?.workspaces?.list?.getSnapshot?.()?.archivedSessionIds) ||
+        ctx?.get?.('workspaces')?.list?.getSnapshot?.()?.archivedSessionIds ||
+        []
+      );
       const rows = document.querySelectorAll('[role="treeitem"], [data-session-id], [data-tree-node-id], a[href*="/session/"], .dsh-session-item');
 
       for (const row of rows) {
+        // 先移除旧的占位按钮：允许后续解析成功时升级为真实删除按钮
+        row.querySelectorAll('.dsh-trash-row-btn--spacer').forEach((el) => el.remove());
+        delete row.dataset.dshTrashSpacer;
+
+        // 自愈：标记已设置但按钮丢失（例如��� React 重渲染移除）时，清除标记重新注入
+        if (row.dataset.dshTrashInjected === 'true' && !row.querySelector('[data-dsh-session-recycle-bin-delete]')) {
+          delete row.dataset.dshTrashInjected;
+          row.classList.remove('dsh-trash-row');
+        }
+
         if (row.querySelector('[data-dsh-session-recycle-bin-delete]') || row.dataset.dshTrashInjected === 'true') continue;
 
         let sessionId = row.dataset.sessionId || row.dataset.treeNodeId;
@@ -1096,8 +1180,53 @@ window.__ModuleLoader__.load({
         if (actionBtn) {
           title = sessionTitleFromLabel(actionBtn.getAttribute('aria-label')) || '';
           if (title && titleIndex.has(title)) {
-            const ids = titleIndex.get(title);
-            if (ids && ids.length === 1) sessionId = ids[0];
+            // 只考虑"可见"候选：排除已归档、空白、子代理会话
+            const liveIds = (titleIndex.get(title) || []).filter((id) => {
+              const rec = byId[id];
+              if (!rec) return false;
+              if (rec.blank || rec.origin === 'subagent') return false;
+              if (archived.has(id)) return false;
+              return true;
+            });
+            if (liveIds.length === 1) {
+              sessionId = liveIds[0];
+            } else if (liveIds.length > 1) {
+              const currentId = snapshot.current;
+              // ① 选中行消歧：当前选中的行就是 current 会话（唯一确定事实）
+              if (row.getAttribute('aria-selected') === 'true' && currentId && liveIds.includes(currentId)) {
+                sessionId = currentId;
+              } else {
+                // ② 位置消歧（仅当列表按更新时间排序时可安全使用）：
+                //    同名行按 DOM 顺序取号，候选按 byRecency（updatedAt 降序、id 升序）排序对应。
+                //    用同名行的相对时间标签校验顺序单调（新→旧），不一致则放弃（安全回退占位）。
+                const sameTitled = siblingSessionRows(row).filter((r) => {
+                  const b = [...r.querySelectorAll('button')].find((btn) => {
+                    const l = btn.getAttribute('aria-label') ?? '';
+                    return SESSION_ARIA_ZH.test(l) || SESSION_ARIA_EN.test(l);
+                  });
+                  return b && sessionTitleFromLabel(b.getAttribute('aria-label')) === title;
+                });
+                const index = sameTitled.indexOf(row);
+                let orderValid = index !== -1;
+                if (orderValid) {
+                  let prev = -1;
+                  for (const r of sameTitled) {
+                    const rank = timeAgeRank(timeLabelOf(r));
+                    if (rank === null || rank < prev) { orderValid = false; break; }
+                    prev = rank;
+                  }
+                }
+                if (orderValid) {
+                  const ordered = [...liveIds].sort((a, b) => {
+                    const ua = byId[a]?.updatedAt ?? 0;
+                    const ub = byId[b]?.updatedAt ?? 0;
+                    if (ub !== ua) return ub - ua;
+                    return a < b ? -1 : 1;
+                  });
+                  if (index >= 0 && index < ordered.length) sessionId = ordered[index];
+                }
+              }
+            }
           }
         }
 
@@ -1106,7 +1235,24 @@ window.__ModuleLoader__.load({
           if (m) sessionId = m[1];
         }
 
-        if (!sessionId) continue;
+        // 空白新建会话兜底：DSH 只渲染"当前"的空白会话行且带 aria-selected=true，
+        // 因此选中的空白行即可安全确定为 current 空白会话。
+        if (!sessionId && !actionBtn && row.tagName === 'DIV' && !row.hasAttribute('aria-expanded')
+            && row.getAttribute('aria-selected') === 'true') {
+          const currentId = snapshot.current;
+          if (currentId && snapshot.byId?.[currentId]?.blank === true) {
+            sessionId = currentId;
+          }
+        }
+
+        if (!sessionId) {
+          // 无法解析 ID 的会话行（如同名且未选中且无法安全消歧的行、个别过渡状态）：
+          // 插入等宽隐形占位按钮保持行对齐；只处理"会话形态"的行，
+          // 不触碰工作区行（含 aria-expanded）与搜索结果行（button 元素）。
+          const sessionLike = actionBtn || (row.tagName === 'DIV' && !row.hasAttribute('aria-expanded'));
+          if (sessionLike) injectSpacerButton(row, title);
+          continue;
+        }
         row.dataset.dshTrashInjected = 'true';
         row.classList.add('dsh-trash-row');
 
@@ -1142,14 +1288,7 @@ window.__ModuleLoader__.load({
         });
 
         // 挂载到左侧空白处（标题前面或左侧 Icon 旁边）
-        const titleSpan = [...row.children].find((child) => child.textContent === title || child.textContent?.includes(title));
-        if (titleSpan) {
-          row.insertBefore(button, titleSpan);
-        } else if (row.firstElementChild) {
-          row.insertBefore(button, row.firstElementChild);
-        } else {
-          row.prepend(button);
-        }
+        insertButtonIntoRow(row, button, title);
       }
     }
 
@@ -1250,7 +1389,7 @@ window.__ModuleLoader__.load({
     }
 
     exports.apply = apply;
-    exports.inject = ['slots', 'connection', 'typert', 'sessions'];
+    exports.inject = ['slots', 'connection', 'typert', 'sessions', 'workspaces'];
 
     /* Shared inline styles */
     const styles = {
