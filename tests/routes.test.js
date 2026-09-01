@@ -124,6 +124,7 @@ describe('Session Trash Host HTTP Routes', () => {
     const paths = routes.map((r) => r.path).sort();
     assert.deepStrictEqual(paths, [
       '/api/session-trash/archive',
+      '/api/session-trash/client.css',
       '/api/session-trash/empty',
       '/api/session-trash/list',
       '/api/session-trash/messages',
@@ -132,6 +133,29 @@ describe('Session Trash Host HTTP Routes', () => {
       '/api/session-trash/sessions',
       '/api/session-trash/unarchive',
     ]);
+  });
+
+  test('GET /client.css serves the plugin stylesheet as text/css', async () => {
+    const res = {
+      status: null,
+      headers: null,
+      body: null,
+      writeHead(status, headers) {
+        this.status = status;
+        this.headers = headers;
+      },
+      end(text) {
+        this.body = text;
+      },
+    };
+    await handlerFor('/api/session-trash/client.css')(request('GET'), res);
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers['content-type'], /^text\/css/);
+    // 组件类与设计令牌都在这一个文件里
+    assert.match(res.body, /\.dsh-trash-container/);
+    assert.match(res.body, /--dstrb-/);
+    // 亮/暗双配色由同一组变量承载，暗色只是变量覆盖
+    assert.match(res.body, /@media \(prefers-color-scheme: dark\)/);
   });
 
   test('GET /list returns archived sessions', async () => {

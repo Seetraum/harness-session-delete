@@ -12,6 +12,7 @@
   "files": [
     "index.js",
     "client.js",
+    "client.css",
     "cordis.patch.yml",
     "packages"
   ],
