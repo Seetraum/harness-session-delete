@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.3.1] - 2026-09-02
+
+### Fixed
+
+- **Recycle-bin turn counts showed "0 轮对话" and the preview modal failed with `cannot get required service "sessionPersistence" in inactive context`** after reinstalling the plugin without restarting `dsh web` (the same holds for any other in-process fiber reload: loader config updates, dependency service restarts). The `/api/session-trash/*` route disposers were kept on a class-instance field that `@deepseek-ai/cordis@4` never invokes, so the unloaded fiber leaked its routes — still served by handlers bound to a dead context — and the reloaded instance then died on `webServer.register`'s duplicate-path throw, leaving the plugin broken until a process restart. Route unregistration is now wired into the owning fiber via `ctx.effect(...)` (the framework's register() disposer contract): unload clears the route table and reload re-registers cleanly, so reinstalling v0.3.1 or later no longer requires a restart (upgrading from a version that already leaked routes still does — the stale table only clears on a restart). Route handlers also snapshot `sessionPersistence` at mount time instead of re-resolving it through the context on every request.
+- `SessionPersistence.delete` is no longer wrapped a second time when the plugin fiber reloads (the patch is idempotent now).
+- A duplicate-path registration failure now reports that a previously leaked route occupies the path and that restarting `dsh web` clears it, instead of the bare `webserver: duplicate exact route ...` error.
+
+### Added
+
+- Fiber-lifecycle regression test (`tests/reload-lifecycle.test.js`) that runs the real plugin against a real `@deepseek-ai/cordis` copy discovered in `node_modules/.pnpm` (auto-skipped when none is installed): a plugin restart must neither leak nor lose routes, and a full unload must unregister every route.
+
 ## [0.3.0] - 2026-09-02
 
 ### Added

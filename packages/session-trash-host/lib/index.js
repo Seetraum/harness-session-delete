@@ -54,11 +54,18 @@ function notifyArchivedSessionsChanged(ctx, archivedSessionIds) {
 /*  Adds physical deletion and memory index cleanup.                     */
 /* ------------------------------------------------------------------ */
 
+/** Marker proving a persistence.delete wrapper was installed by us. */
+const PERSISTENCE_DELETE_PATCHED = Symbol('dsh-session-trash.persistenceDeletePatched');
+
 /**
  * Patch SessionPersistence to add a durable `delete` method.
  * @param {import('@deepseek-ai/dsh-session-persistence').SessionPersistence} persistence
  */
 function patchSessionPersistenceDelete(persistence) {
+  // Idempotent: a fiber reload (plugin reinstall without restarting dsh,
+  // loader config update, dependency restart) runs init again against the
+  // same service instance; never wrap delete twice.
+  if (persistence.delete?.[PERSISTENCE_DELETE_PATCHED]) return;
   const originalDelete = persistence.delete;
   persistence.delete = async function deleteSession(id) {
     if (typeof originalDelete === 'function') {
@@ -87,6 +94,7 @@ function patchSessionPersistenceDelete(persistence) {
     if (this.byId && typeof this.byId.delete === 'function') this.byId.delete(id);
     if (this._headers && typeof this._headers.delete === 'function') this._headers.delete(id);
   };
+  Object.defineProperty(persistence.delete, PERSISTENCE_DELETE_PATCHED, { value: true });
 }
 
 /* ------------------------------------------------------------------ */
@@ -536,6 +544,12 @@ function registerRoutes(ctx) {
   if (!webServer || typeof webServer.register !== 'function') return null;
 
   const registry = ctx.workspaceRegistry;
+  // Snapshot the injected services while the owning fiber is ACTIVE. The
+  // route handlers below only live as long as the fiber (their disposers are
+  // wired through ctx.effect), so resolving them per-request via ctx would
+  // re-trap the dead-fiber guard on every call; the mount-time references are
+  // the stable contract.
+  const persistence = ctx.sessionPersistence;
   const disposers = [];
 
   /** Broadcast the current archive set after any mutation. */
@@ -547,7 +561,7 @@ function registerRoutes(ctx) {
 
   /** All sessions: persistence headers ∪ workspace membership, with archive flag. */
   async function allSessions() {
-    const headers = (await ctx.sessionPersistence?.list?.()) ?? [];
+    const headers = (await persistence?.list?.()) ?? [];
     const archived = registry?.requireState?.()?.archivedSessionIds ?? [];
     const byId = new Map(headers.map((h) => [h.id, h]));
     const wsBySession = new Map();
@@ -664,7 +678,6 @@ function registerRoutes(ctx) {
         const sessionId = url.searchParams.get('sessionId');
         if (!sessionId) throw httpError(400, 'BAD_REQUEST', 'sessionId is required');
 
-        const persistence = ctx.sessionPersistence;
         const logPath = typeof persistence?.findLog === 'function' ? await persistence.findLog(sessionId) : undefined;
         const messages = [];
 
@@ -954,7 +967,21 @@ function registerRoutes(ctx) {
   ];
 
   for (const route of routes) {
-    disposers.push(webServer.register(route));
+    try {
+      disposers.push(webServer.register(route));
+    } catch (error) {
+      // The webServer rejects duplicate paths. The only way one of OUR paths
+      // can already be taken is a stale bundle that leaked its routes on
+      // fiber unload (<= v0.3.0 stored the disposer where cordis never calls
+      // it). That leaked state only clears on a profile-process restart, so
+      // fail with an actionable message instead of a bare duplicate error.
+      throw new Error(
+        `session-trash-host: cannot register ${route.path}: ${error?.message ?? error}`
+        + ' — a route leaked by a previous instance still occupies this path;'
+        + ' restart dsh web to clean up',
+        { cause: error },
+      );
+    }
   }
   return () => {
     for (const dispose of disposers) {
@@ -1003,7 +1030,24 @@ export class SessionTrashHost extends ServiceClass {
       patchWorkspaceRegistry(registry, ctx);
     }
 
-    this.#routesDisposer = registerRoutes(ctx);
+    const disposeRoutes = registerRoutes(ctx);
+    if (!disposeRoutes) return;
+    this.#routesDisposer = disposeRoutes;
+
+    // THE fix (v0.3.1): bind route unregistration to THIS fiber's lifecycle —
+    // cordis's "register() disposer contract". @deepseek-ai/cordis@4 never
+    // calls a class instance's dispose(); only effects collected via
+    // ctx.effect unwind on fiber unload. Before this, any in-process reload
+    // (reinstalling the plugin without restarting dsh web, a loader config
+    // update, a dependency service restart) leaked the old routes bound to
+    // the now-inactive context — every ctx.sessionPersistence access then
+    // threw "cannot get required service ... in inactive context" (turn
+    // counts silently zeroed, preview broken) — and the reloaded instance
+    // died on webServer.register's duplicate-path throw. disposeRoutes is
+    // idempotent, so the defensive dispose() below can share it.
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(() => disposeRoutes, 'session-trash-host: /api/session-trash/* routes');
+    }
   }
 
   dispose() {

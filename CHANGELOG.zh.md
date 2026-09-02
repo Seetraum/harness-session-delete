@@ -7,6 +7,18 @@
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.3.1] - 2026-09-02
+
+### 修复
+
+- **回收站轮数显示为“0 轮对话”、点击查看报 `cannot get required service "sessionPersistence" in inactive context`**：在不重启 `dsh web` 的情况下重装插件（以及一切进程内 fiber 重载场景：loader 配置更新、依赖服务重启）会触发。根因是 `/api/session-trash/*` 路由的注销函数只存在类实例字段里，而 `@deepseek-ai/cordis@4` 从不调用实例的 dispose()——旧 fiber 卸载后路由泄漏（handler 仍绑定已失活的 ctx），重载的新实例又因 `webServer.register` 路径重复抛错而起不来，插件从此瘫痪直至重启进程。现在通过 `ctx.effect(...)` 把路由注销挂到所属 fiber 的生命周期（框架的 register() disposer 契约）：卸载时清空路由表、重载时干净重注册，v0.3.1 起重装插件不再需要重启（但从已泄漏路由的旧版本升级仍需重启一次，泄漏表只有重启能清）。路由 handler 也改为挂载时快照 `sessionPersistence`，不再每次请求经 ctx 重新解析。
+- 插件 fiber 重载时 `SessionPersistence.delete` 不再被二次包装（补丁幂等）。
+- 路径重复导致注册失败时，报错会说明是先前实例泄漏的路由占用了路径、重启 `dsh web` 可清理，而不是只有一句裸的 `webserver: duplicate exact route ...`。
+
+### 新增
+
+- fiber 生命周期回归测试（`tests/reload-lifecycle.test.js`）：在 `node_modules/.pnpm` 中自动发现真实 `@deepseek-ai/cordis` 并用真实运行时驱动插件（未安装时自动跳过）——插件 restart 不得泄漏或丢失路由，完整卸载必须注销全部路由。
+
 ## [0.3.0] - 2026-09-02
 
 ### 新增
