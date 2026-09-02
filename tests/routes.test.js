@@ -156,6 +156,10 @@ describe('Session Trash Host HTTP Routes', () => {
     assert.match(res.body, /--dstrb-/);
     // 亮/暗双配色由同一组变量承载，暗色只是变量覆盖
     assert.match(res.body, /@media \(prefers-color-scheme: dark\)/);
+    // 暗色解析优先跟随 DSH 应用主题（与 OS 媒体查询成“或”关系），
+    // 应用明确浅色时恢复浅色令牌，避免“应用浅色 + OS 深色”时白字白底
+    assert.match(res.body, /body\[data-ds-dark-theme\]/);
+    assert.match(res.body, /body:not\(\[data-ds-dark-theme\]\)/);
   });
 
   test('GET /list returns archived sessions', async () => {

@@ -3,16 +3,20 @@
  *
  * Served by the host at GET /api/session-trash/client.css and injected by
  * client.js as a <link rel="stylesheet">. All colors are CSS custom
- * properties (design tokens) declared on :root; the dark palette simply
- * overrides them under `@media (prefers-color-scheme: dark)`, so every
- * component follows the OS light/dark color mode automatically.
+ * properties (design tokens) declared on :root; the dark palette applies
+ * under `body[data-ds-dark-theme]` (the resolved DSH appearance: light /
+ * dark / system, set by the host right after <body> opens) OR under
+ * `@media (prefers-color-scheme: dark)` (OS-level fallback), while an
+ * explicit light appearance restores the light palette via
+ * `body:not([data-ds-dark-theme])` — so inside DSH the app preference is
+ * authoritative, and the OS media query remains the fallback without it.
  *
  * Naming: components use the `dsh-trash-` prefix; markdown blocks are styled
  * with element selectors scoped under `.dsh-trash-md`.
  */
 
 /* ------------------------------------------------------------------ */
-/*  Design tokens (light = default, dark = prefers-color-scheme)      */
+/*  Design tokens (light default; dark = app theme || OS fallback)   */
 /* ------------------------------------------------------------------ */
 
 :root {
@@ -132,6 +136,133 @@
 }
 
 /* ------------------------------------------------------------------ */
+/*  DSH app theme — body[data-ds-dark-theme]                          */
+/* ------------------------------------------------------------------ */
+/*  The host app resolves its appearance preference (light / dark /    */
+/*  system) onto body[data-ds-dark-theme] as an inline script right    */
+/*  after <body> opens. This block ORs with the OS media query above:  */
+/*  either match resolves the dark palette.                            */
+/* ------------------------------------------------------------------ */
+
+body[data-ds-dark-theme] {
+  --dstrb-text-strong: #edf2f7;
+  --dstrb-text: #e2e8f0;
+  --dstrb-text-secondary: #cbd5e0;
+  --dstrb-text-muted: #a0aec0;
+  --dstrb-text-faint: #718096;
+
+  --dstrb-accent: #63b3ed;
+  --dstrb-accent-veil: rgba(99, 179, 237, 0.2);
+  --dstrb-danger: #fc8181;
+  --dstrb-danger-strong: #feb2b2;
+  --dstrb-danger-border: #9b2c2c;
+  --dstrb-danger-veil: rgba(252, 129, 129, 0.12);
+  --dstrb-on-danger: #1a202c;
+
+  --dstrb-surface: #1f2530;
+  --dstrb-surface-subtle: #262e3d;
+  --dstrb-surface-hover: #2c3444;
+
+  --dstrb-border: #3a4356;
+  --dstrb-border-light: #333c4e;
+  --dstrb-border-hairline: #2c3444;
+
+  --dstrb-veil: rgba(255, 255, 255, 0.08);
+  --dstrb-overlay: rgba(0, 0, 0, 0.65);
+
+  --dstrb-shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --dstrb-shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --dstrb-shadow-modal: 0 20px 40px rgba(0, 0, 0, 0.55);
+  --dstrb-shadow-modal-sm: 0 10px 25px rgba(0, 0, 0, 0.5);
+  --dstrb-shadow-tooltip: 0 8px 24px rgba(0, 0, 0, 0.55);
+  --dstrb-shadow-toast: 0 4px 12px rgba(0, 0, 0, 0.4);
+
+  --dstrb-tooltip-bg: #e2e8f0;
+  --dstrb-tooltip-text: #1a202c;
+  --dstrb-tooltip-muted: #4a5568;
+
+  --dstrb-toast-bg: #e2e8f0;
+  --dstrb-toast-text: #1a202c;
+  --dstrb-toast-btn-bg: #cbd5e0;
+  --dstrb-toast-btn-text: #1a202c;
+
+  --dstrb-code-inline-bg: rgba(255, 255, 255, 0.12);
+  --dstrb-code-inline-text: #fc8181;
+  --dstrb-quote-bg: rgba(255, 255, 255, 0.04);
+  --dstrb-quote-border: #4a5568;
+  --dstrb-bubble-user: #2c3444;
+}
+
+/*  An explicit light preference restores the light palette even under  */
+/*  a dark OS, so the app preference stays authoritative inside DSH     */
+/*  (fixes near-white titles on a light page).                          */
+
+body:not([data-ds-dark-theme]) {
+  --dstrb-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --dstrb-mono: SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+
+  /* Text */
+  --dstrb-text-strong: #1a202c;
+  --dstrb-text: #2d3748;
+  --dstrb-text-secondary: #4a5568;
+  --dstrb-text-muted: #718096;
+  --dstrb-text-faint: #a0aec0;
+
+  /* Accents */
+  --dstrb-accent: #3182ce;
+  --dstrb-accent-veil: rgba(49, 130, 206, 0.15);
+  --dstrb-danger: #e53e3e;
+  --dstrb-danger-strong: #c53030;
+  --dstrb-danger-border: #feb2b2;
+  --dstrb-danger-veil: rgba(229, 62, 62, 0.08);
+  --dstrb-on-danger: #ffffff;
+
+  /* Surfaces */
+  --dstrb-surface: #ffffff;          /* cards, modals, menus            */
+  --dstrb-surface-subtle: #f7fafc;   /* inputs, badges, checked rows    */
+  --dstrb-surface-hover: #edf2f7;    /* cancel button, user bubble base */
+
+  /* Borders */
+  --dstrb-border: #e2e8f0;
+  --dstrb-border-light: #edf2f7;
+  --dstrb-border-hairline: #f0f4f8;
+
+  /* Veils & overlays */
+  --dstrb-veil: rgba(0, 0, 0, 0.06);
+  --dstrb-overlay: rgba(0, 0, 0, 0.45);
+
+  /* Shadows */
+  --dstrb-shadow-card: 0 2px 8px rgba(0, 0, 0, 0.03);
+  --dstrb-shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --dstrb-shadow-modal: 0 20px 40px rgba(0, 0, 0, 0.2);
+  --dstrb-shadow-modal-sm: 0 10px 25px rgba(0, 0, 0, 0.2);
+  --dstrb-shadow-tooltip: 0 8px 24px rgba(0, 0, 0, 0.2);
+  --dstrb-shadow-toast: 0 4px 12px rgba(0, 0, 0, 0.15);
+
+  /* Inverted tooltip */
+  --dstrb-tooltip-bg: #1a202c;
+  --dstrb-tooltip-text: #ffffff;
+  --dstrb-tooltip-muted: #a0aec0;
+
+  /* Toast (also inverted) */
+  --dstrb-toast-bg: #2d3748;
+  --dstrb-toast-text: #ffffff;
+  --dstrb-toast-btn-bg: #4a5568;
+  --dstrb-toast-btn-text: #63b3ed;
+
+  /* Markdown */
+  --dstrb-code-inline-bg: rgba(0, 0, 0, 0.07);
+  --dstrb-code-inline-text: #c53030;
+  --dstrb-quote-bg: rgba(0, 0, 0, 0.02);
+  --dstrb-quote-border: #cbd5e0;
+  --dstrb-bubble-user: #edf2f7;
+  /* Code blocks stay dark in both modes (editor-style) */
+  --dstrb-codeblock-bg: #1e293b;
+  --dstrb-codeblock-text: #e2e8f0;
+  --dstrb-codeblock-lang: #94a3b8;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Page container — width follows the window ratio (no fixed px cap) */
 /* ------------------------------------------------------------------ */
 
@@ -141,8 +272,15 @@
   margin: 0 auto;
   font-family: var(--dstrb-font);
   color: var(--dstrb-text);
-  color-scheme: light dark; /* native select/checkbox follow the color mode */
+  color-scheme: light dark; /* native select/checkbox follow the resolved mode */
 }
+
+/* App-theme-scoped overrides: native controls (select, checkbox,
+   scrollbars) follow the resolved plugin mode, matching the painted
+   surfaces even when the OS media query disagrees with the DSH
+   appearance preference. */
+body[data-ds-dark-theme] .dsh-trash-container { color-scheme: dark; }
+body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 
 .dsh-trash-container,
 .dsh-trash-container * {

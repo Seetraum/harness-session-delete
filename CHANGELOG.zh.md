@@ -7,6 +7,17 @@
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.3.0] - 2026-09-02
+
+### 新增
+
+- **浅色/深色自适应界面**（PR #1，作者 [@1MLightyears](https://github.com/1MLightyears)）：全部内联样式迁移至独立 `client.css`，由 host 以 `GET /api/session-trash/client.css` 提供服务（懒读取、`no-cache`），`client.js` 以 `<link rel="stylesheet">` 注入；颜色收敛为 `--dstrb-*` 设计令牌并新增暗色配色（卡片、弹窗、预览气泡、Markdown、toast、tooltip 全覆盖）；补充路由测试并更新 README 说明。
+
+### 修复
+
+- **暗色配色解析改为跟随 DSH 应用外观而非仅跟随 OS**：DSH 将外观偏好（浅色/深色/跟随系统）的解析结果落到 `body[data-ds-dark-theme]` 上，`@media (prefers-color-scheme: dark)` 无法感知。暗色令牌现在在 `body[data-ds-dark-theme]` 命中或 OS 媒体查询命中（保留为兜底）时生效，且应用明确为浅色时通过 `body:not([data-ds-dark-theme])` 恢复浅色令牌——修复「应用浅色 + OS 深色」时主标题白字白底不可读的问题，也补上纯媒体查询方案下「应用深色 + OS 浅色」不生效的缺口。
+- 回收站页面内的原生表单控件（select、checkbox、滚动条）通过作用域化的 `color-scheme` 规则跟随插件解析后的配色模式，不再被 OS 媒体查询带偏。
+
 ## [0.2.2] - 2026-09-01
 
 ### 修复

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.3.0] - 2026-09-02
+
+### Added
+
+- **Light/dark adaptive UI** (PR #1 by [@1MLightyears](https://github.com/1MLightyears)): all inline styles moved into an external `client.css` served by the host at `GET /api/session-trash/client.css` (lazy read, `no-cache`) and injected by `client.js` as a `<link rel="stylesheet">`; colors became `--dstrb-*` design tokens with a dark palette (cards, modals, preview bubbles, markdown, toasts, tooltips); route test coverage and README documentation added.
+
+### Fixed
+
+- **Dark palette resolution now follows the DSH appearance, not only the OS**: DSH resolves its appearance preference (light / dark / system) onto `body[data-ds-dark-theme]`, which `@media (prefers-color-scheme: dark)` cannot observe. Dark tokens now apply under `body[data-ds-dark-theme]` OR the OS media query (kept as fallback), and an explicit light preference restores the light palette via `body:not([data-ds-dark-theme])` — fixing unreadable near-white titles when the app ran light under a dark OS, and the dark-app / light-OS gap left by the media query alone.
+- Native form controls (select, checkbox, scrollbars) inside the recycle-bin page now follow the resolved plugin mode via scoped `color-scheme` rules instead of the raw OS media query.
+
 ## [0.2.2] - 2026-09-01
 
 ### Fixed

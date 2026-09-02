@@ -16,7 +16,7 @@ Move sessions into a recycle bin from the sidebar, restore or permanently delete
 - **True permanent delete** — physically removes the session log from disk and the projection-cache record; ghost sessions (records without a log) are cleaned up so they vanish instead of lingering.
 - **Live-session protection** — sessions with an active agent are refused deletion.
 - **Batch fault tolerance** — batch operations delete per-session with error collection and reporting.
-- **Light/dark adaptive UI** — all colors are CSS custom properties in `client.css`; components follow the OS color mode via `prefers-color-scheme` (no hardcoded palette).
+- **Light/dark adaptive UI** — all colors are CSS custom properties in `client.css`; components follow the resolved DSH appearance (`data-ds-dark-theme`) with `prefers-color-scheme` as the OS-level fallback (no hardcoded palette).
 
 ---
 
