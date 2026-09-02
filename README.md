@@ -16,6 +16,7 @@ Move sessions into a recycle bin from the sidebar, restore or permanently delete
 - **True permanent delete** — physically removes the session log from disk and the projection-cache record; ghost sessions (records without a log) are cleaned up so they vanish instead of lingering.
 - **Live-session protection** — sessions with an active agent are refused deletion.
 - **Batch fault tolerance** — batch operations delete per-session with error collection and reporting.
+- **Light/dark adaptive UI** — all colors are CSS custom properties in `client.css`; components follow the OS color mode via `prefers-color-scheme` (no hardcoded palette).
 
 ---
 
@@ -72,6 +73,7 @@ harness-session-delete/
 ├── cordis.patch.yml        # bundle patch: one insert mounting the host row
 ├── index.js                # node half: host entry (inject + apply)
 ├── client.js               # browser half: sidebar icons + settings recycle bin
+├── client.css              # plugin stylesheet: design tokens + light/dark adaptive components
 └── packages/
     └── session-trash-host/ # host implementation (persistence/workspace/cache patches, HTTP routes)
 ```

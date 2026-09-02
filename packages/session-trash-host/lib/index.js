@@ -17,6 +17,7 @@
  */
 import { rm, readdir, rmdir, stat, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Robust Service base class fallback for standalone testing environment
 let ServiceClass;
@@ -462,6 +463,14 @@ function patchWorkspaceRegistry(registry, ctx) {
 const ROUTE_PREFIX = '/api/session-trash';
 const PLUGIN_HEADER = 'x-dsh-plugin';
 const PLUGIN_HEADER_VALUE = 'session-trash';
+
+/**
+ * Absolute path of the browser stylesheet shipped at the bundle root.
+ * Resolved relative to this module (…/packages/session-trash-host/lib/),
+ * which works for both npm-installed bundles and `plugin add link:`
+ * development checkouts.
+ */
+const CLIENT_CSS_PATH = fileURLToPath(new URL('../../../client.css', import.meta.url));
 
 function httpError(statusCode, code, message) {
   return Object.assign(new Error(message), { statusCode, code });
@@ -918,6 +927,28 @@ function registerRoutes(ctx) {
         const result = (await registry?.emptyArchivedSessions?.()) ?? { deletedCount: 0, total: 0 };
         broadcastArchived();
         ok(res, result);
+      }),
+    },
+    // GET client.css — the plugin stylesheet (light/dark adaptive design
+    // tokens). client.js injects it as a <link rel="stylesheet">. Read
+    // lazily per request so stylesheet edits show up after a browser
+    // refresh without restarting the profile process.
+    {
+      kind: 'exact',
+      path: `${ROUTE_PREFIX}/client.css`,
+      handler: guard(async (req, res) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: { code: 'METHOD', message: 'GET only' } });
+        let css;
+        try {
+          css = await readFile(CLIENT_CSS_PATH, 'utf8');
+        } catch {
+          throw httpError(404, 'CSS_NOT_FOUND', `client.css is missing at ${CLIENT_CSS_PATH}`);
+        }
+        res.writeHead(200, {
+          'content-type': 'text/css; charset=utf-8',
+          'cache-control': 'no-cache',
+        });
+        res.end(css);
       }),
     },
   ];

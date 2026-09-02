@@ -16,6 +16,7 @@
 - **真正的彻底删除** — 物理清除磁盘日志与投影缓存；无日志的幽灵会话被彻底清理，不会残留。
 - **活跃会话保护** — 正在运行（有活跃 agent）的会话拒绝删除。
 - **批量容错** — 批量操作逐条执行，收集并汇报失败项。
+- **浅色/深色自适应界面** — 所有颜色以 CSS 变量（设计令牌）收敛在 `client.css`，组件经 `prefers-color-scheme` 跟随系统配色模式，无硬编码色板。
 
 ---
 
@@ -72,6 +73,7 @@ harness-session-delete/
 ├── cordis.patch.yml        # bundle patch：一行 insert 挂载 host 行
 ├── index.js                # node 半边：host 入口（inject + apply）
 ├── client.js               # browser 半边：侧边栏图标 + 设置页回收站
+├── client.css              # 插件样式表：设计令牌 + 浅色/深色自适应组件
 └── packages/
     └── session-trash-host/ # host 实现（persistence/workspace/cache 补丁、HTTP 路由）
 ```
