@@ -54,19 +54,35 @@ function notifyArchivedSessionsChanged(ctx, archivedSessionIds) {
 /*  Adds physical deletion and memory index cleanup.                     */
 /* ------------------------------------------------------------------ */
 
-/** Marker proving a persistence.delete wrapper was installed by us. */
+/**
+ * Marker installed on every service method this bundle patches, carrying the
+ * owning install's token. cordis unloads a plugin fiber WITHOUT unwinding
+ * methods previously patched onto shared service objects, so a later instance
+ * must be able to (a) recognise a patch left behind by an earlier fiber,
+ * (b) replace it with one closing over the live context, and (c) on unload
+ * remove only its own methods — never a newer instance's.
+ */
+const TRASH_PATCH = Symbol('dsh-session-trash.patch');
+/** Kept on our persistence.delete wrapper: the pristine function to restore. */
+const TRASH_PATCH_ORIGINAL = Symbol('dsh-session-trash.patchOriginal');
+/** v0.3.1's untagged wrapper marker — still detected so its (context-free,
+ *  fully functional) wrapper is kept instead of nested. */
 const PERSISTENCE_DELETE_PATCHED = Symbol('dsh-session-trash.persistenceDeletePatched');
 
 /**
  * Patch SessionPersistence to add a durable `delete` method.
  * @param {import('@deepseek-ai/dsh-session-persistence').SessionPersistence} persistence
+ * @returns a disposer restoring the pristine delete, or null when an existing
+ *   wrapper (ours or ≤v0.3.1's, both context-free) was kept as-is.
  */
 function patchSessionPersistenceDelete(persistence) {
-  // Idempotent: a fiber reload (plugin reinstall without restarting dsh,
-  // loader config update, dependency restart) runs init again against the
-  // same service instance; never wrap delete twice.
-  if (persistence.delete?.[PERSISTENCE_DELETE_PATCHED]) return;
+  // A wrapper is already installed — by this version, a newer one, or a ≤v0.3.1
+  // fiber that leaked it (PERSISTENCE_DELETE_PATCHED, kept for that detection).
+  // The wrapper touches no context, so the stale one keeps working; wrapping it
+  // again would only nest duplicate physical deletions.
+  if (persistence.delete?.[TRASH_PATCH] || persistence.delete?.[PERSISTENCE_DELETE_PATCHED]) return null;
   const originalDelete = persistence.delete;
+  const token = Symbol('dsh-session-trash.deletePatch');
   persistence.delete = async function deleteSession(id) {
     if (typeof originalDelete === 'function') {
       try {
@@ -94,7 +110,15 @@ function patchSessionPersistenceDelete(persistence) {
     if (this.byId && typeof this.byId.delete === 'function') this.byId.delete(id);
     if (this._headers && typeof this._headers.delete === 'function') this._headers.delete(id);
   };
-  Object.defineProperty(persistence.delete, PERSISTENCE_DELETE_PATCHED, { value: true });
+  Object.defineProperty(persistence.delete, TRASH_PATCH, { value: token });
+  Object.defineProperty(persistence.delete, TRASH_PATCH_ORIGINAL, { value: originalDelete });
+  // Restore the pristine delete on fiber unload — unless a newer install has
+  // since replaced the wrapper (token mismatch).
+  return () => {
+    if (persistence.delete?.[TRASH_PATCH] !== token) return;
+    if (originalDelete === undefined) delete persistence.delete;
+    else persistence.delete = originalDelete;
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -105,8 +129,13 @@ function patchSessionPersistenceDelete(persistence) {
 /**
  * Patch the SessionProjectionCache to add a `remove` method.
  * @param {import('@deepseek-ai/dsh-session-projection-cache').SessionProjectionCache} cache
+ * @returns a disposer removing our method, or null when an existing remove
+ *   (foreign, or a context-free ≤v0.3.1 leftover doing the same job) was kept.
  */
 function patchProjectionCacheRemove(cache) {
+  const existing = cache.remove;
+  if (typeof existing === 'function' && !existing[TRASH_PATCH]) return null;
+  const token = Symbol('dsh-session-trash.cachePatch');
   /**
    * Remove one session's cached checkpoint record durably (fail-soft).
    * @param {import('@deepseek-ai/dsh-session').SessionId} id
@@ -126,6 +155,11 @@ function patchProjectionCacheRemove(cache) {
       this.markClean(id);
     }
   };
+  Object.defineProperty(cache.remove, TRASH_PATCH, { value: token });
+  // Remove our method on fiber unload — unless a newer install replaced it.
+  return () => {
+    if (cache.remove?.[TRASH_PATCH] === token) delete cache.remove;
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -134,10 +168,23 @@ function patchProjectionCacheRemove(cache) {
 
 /**
  * Patch the WorkspaceRegistry with new methods.
+ *
+ * v0.3.2: methods left on the shared registry by an EARLIER fiber (uninstall
+ * + reinstall without a restart) must be replaced, not reused — their
+ * closures capture the dead context, so listArchivedSessions() silently
+ * lost turn counts while the routes (rebuilt per mount) kept working. Every
+ * installed method is tagged with this install's TRASH_PATCH token; a fresh
+ * instance overwrites whatever stale methods it finds, and the returned
+ * disposer removes only methods still carrying this install's token.
+ *
  * @param {import('@deepseek-ai/dsh-workspace').WorkspaceRegistry} registry
  * @param {import('@deepseek-ai/cordis').Context} ctx
+ * @returns a disposer removing every method installed here, or null when the
+ *   registry is missing.
  */
 function patchWorkspaceRegistry(registry, ctx) {
+  if (!registry) return null;
+  const token = Symbol('dsh-session-trash.registryPatch');
   const runInQueue = (fn) => {
     if (typeof registry.enqueueOperation === 'function') {
       return registry.enqueueOperation(fn);
@@ -450,6 +497,27 @@ function patchWorkspaceRegistry(registry, ctx) {
       ordered.push(...group.items);
     }
     return ordered;
+  };
+
+  // Tag every method installed above with this install's token, then hand
+  // back a disposer that removes exactly these methods on fiber unload —
+  // but only those a newer instance has not since replaced (token check).
+  const INSTALLED = [
+    'archiveSession',
+    'unarchiveSession',
+    'permanentlyDeleteSession',
+    'emptyArchivedSessions',
+    'listArchivedSessions',
+  ];
+  for (const name of INSTALLED) {
+    if (typeof registry[name] === 'function') {
+      Object.defineProperty(registry[name], TRASH_PATCH, { value: token });
+    }
+  }
+  return () => {
+    for (const name of INSTALLED) {
+      if (registry[name]?.[TRASH_PATCH] === token) delete registry[name];
+    }
   };
 }
 
@@ -1015,38 +1083,50 @@ export class SessionTrashHost extends ServiceClass {
   async [ServiceClass.init || Symbol.for('cordis.init')]() {
     const ctx = this.ctx;
 
+    // v0.3.2: every service patch is now REVERSIBLE. Each installer returns a
+    // disposer bound to this fiber, and a stale patch left behind by an
+    // earlier fiber is detected via its TRASH_PATCH tag and replaced with one
+    // closing over the live context. Before this, uninstalling + reinstalling
+    // without a restart left the registry methods of the DEAD fiber in place
+    // (the old 'typeof x !== function' guards refused to re-patch), so the
+    // recycle-bin list kept calling listArchivedSessions() whose closure held
+    // an inactive ctx — ctx.sessionPersistence threw inside the per-session
+    // try/catch and every turn count silently read 0 — while the preview
+    // (routes rebuilt per mount, snapshotting services) worked fine.
+    const undoPatches = [];
+
     const persistence = ctx.sessionPersistence;
-    if (persistence) {
-      patchSessionPersistenceDelete(persistence);
-    }
+    if (persistence) undoPatches.push(patchSessionPersistenceDelete(persistence));
 
     const cache = ctx.get('sessionProjectionCache');
-    if (cache && typeof cache.remove !== 'function') {
-      patchProjectionCacheRemove(cache);
-    }
+    if (cache) undoPatches.push(patchProjectionCacheRemove(cache));
 
     const registry = ctx.workspaceRegistry;
-    if (registry && typeof registry.unarchiveSession !== 'function') {
-      patchWorkspaceRegistry(registry, ctx);
-    }
+    if (registry) undoPatches.push(patchWorkspaceRegistry(registry, ctx));
 
     const disposeRoutes = registerRoutes(ctx);
-    if (!disposeRoutes) return;
-    this.#routesDisposer = disposeRoutes;
+    const disposeAll = () => {
+      try { disposeRoutes?.(); } catch { /* best effort */ }
+      for (const undo of undoPatches) {
+        try { undo?.(); } catch { /* best effort */ }
+      }
+    };
 
-    // THE fix (v0.3.1): bind route unregistration to THIS fiber's lifecycle —
-    // cordis's "register() disposer contract". @deepseek-ai/cordis@4 never
-    // calls a class instance's dispose(); only effects collected via
-    // ctx.effect unwind on fiber unload. Before this, any in-process reload
-    // (reinstalling the plugin without restarting dsh web, a loader config
-    // update, a dependency service restart) leaked the old routes bound to
-    // the now-inactive context — every ctx.sessionPersistence access then
-    // threw "cannot get required service ... in inactive context" (turn
-    // counts silently zeroed, preview broken) — and the reloaded instance
-    // died on webServer.register's duplicate-path throw. disposeRoutes is
-    // idempotent, so the defensive dispose() below can share it.
+    // v0.3.1 fix, extended: bind BOTH the routes and the service patches to
+    // THIS fiber's lifecycle — cordis's "register() disposer contract".
+    // @deepseek-ai/cordis@4 never calls a class instance's dispose(); only
+    // effects collected via ctx.effect unwind on fiber unload. Without this
+    // any in-process reload (reinstalling the plugin without restarting dsh
+    // web, a loader config update, a dependency service restart) leaked the
+    // old routes bound to the now-inactive context — ctx.sessionPersistence
+    // then threw "cannot get required service ... in inactive context" and
+    // the reloaded instance died on webServer.register's duplicate-path
+    // throw. disposeAll is idempotent (token checks), so the defensive
+    // dispose() below can share it.
+    this.#routesDisposer = disposeAll;
+
     if (typeof ctx.effect === 'function') {
-      ctx.effect(() => disposeRoutes, 'session-trash-host: /api/session-trash/* routes');
+      ctx.effect(() => disposeAll, 'session-trash-host: /api/session-trash/* routes + service patches');
     }
   }
 

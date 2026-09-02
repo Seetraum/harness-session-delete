@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.3.2] - 2026-09-02
+
+### Fixed
+
+- **Recycle-bin list showed "0 轮对话" for every session after uninstalling and reinstalling the plugin without a restart, while the preview modal still worked.** This was the sibling of the v0.3.1 route leak: the methods patched onto the SHARED `workspaceRegistry` service (`listArchivedSessions` and friends) stayed behind after the owning fiber unloaded, and the new instance's `typeof x !== 'function'` guards then refused to re-patch — so the list kept calling a method whose closure held the dead context: `ctx.sessionPersistence` threw inside the per-session try/catch, turn counts silently read 0, and the preview (whose routes snapshot services at mount) stayed healthy. All service patches are now REVERSIBLE and token-tagged: each install tags the methods it adds (or, for `persistence.delete`, the wrapper it installs) with its own token, a fresh install overwrites whatever stale patch it finds — healing a broken live process in place — and the fiber's unload disposer removes only methods still carrying that install's token. Context-free leftovers from <= v0.3.1 (the old `persistence.delete` wrapper, `cache.remove`) are detected and kept instead of being nested.
+
+### Added
+
+- Lifecycle regression tests for the new failure mode: uninstall + reinstall must keep `listArchivedSessions()` on the live context (turn counts and derived titles survive), and mounting over stale untagged (<= v0.3.1) registry methods must heal them in place.
+
 ## [0.3.1] - 2026-09-02
 
 ### Fixed

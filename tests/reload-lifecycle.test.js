@@ -6,24 +6,27 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /**
- * Fiber-lifecycle regression test (real cordis).
+ * Fiber-lifecycle regression tests (real cordis).
  *
- * Bug fixed in v0.3.1: route disposers lived on a class-instance field that
- * @deepseek-ai/cordis@4 never calls (the fork only unwinds effects collected
- * via ctx.effect). Any in-process fiber unload/reload — reinstalling the
- * plugin without restarting dsh web, a loader config update, or a dependency
- * service restart — therefore (1) leaked the old routes bound to an inactive
- * context ("cannot get required service ... in inactive context", turn
- * counts silently zeroed) and (2) made the reloaded instance die on
- * webServer.register's duplicate-path throw.
+ * v0.3.1 fixed the leaked webServer routes: disposers must be wired through
+ * ctx.effect (the register() disposer contract), because @deepseek-ai/cordis@4
+ * never calls a class instance's dispose().
  *
- * This test runs the real plugin class against the real cordis runtime. The
- * plugin package itself has no cordis dependency (it imports it optionally),
- * so the test discovers a cordis copy inside the pnpm store, builds a tiny
- * sandbox whose node_modules exposes it, and imports a copy of the host lib
- * from there — that way the lib's internal 'await import("@deepseek-ai/
- * cordis")' resolves to the real Service base class. Skipped when no cordis
- * copy is installed.
+ * v0.3.2 fixed the sibling leak: methods patched ONTO SHARED SERVICES
+ * (workspaceRegistry.listArchivedSessions and friends) stayed behind after
+ * the owning fiber unloaded, and the next instance's 'typeof x !== function'
+ * guards refused to re-patch — so after an uninstall+reinstall without a
+ * restart the recycle-bin list kept calling a method whose closure held an
+ * inactive ctx: ctx.sessionPersistence threw inside the per-session
+ * try/catch and every turn count silently read 0, while the preview (routes
+ * rebuilt per mount) kept working. Patches are now reversible (token-tagged)
+ * and a fresh install replaces any stale one it finds.
+ *
+ * The plugin package has no cordis dependency (it imports it optionally), so
+ * these tests discover a cordis copy inside the pnpm store, build a sandbox
+ * whose node_modules exposes it, and import a copy of the host lib from
+ * there — the lib's internal 'await import("@deepseek-ai/cordis")' then
+ * resolves to the real Service base class. Skipped without a cordis copy.
  */
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -45,60 +48,155 @@ async function findCordisDir() {
 
 const cordisDir = await findCordisDir();
 
+/** Build a sandboxed copy of the host lib with a resolvable cordis. */
+async function importHost() {
+  const sandbox = join(repoRoot, '.tmp', 'dsh-reload-test-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7));
+  await mkdir(join(sandbox, 'node_modules', '@deepseek-ai'), { recursive: true });
+  await symlink(cordisDir, join(sandbox, 'node_modules', '@deepseek-ai', 'cordis'), 'dir');
+  await cp(join(repoRoot, 'packages', 'session-trash-host', 'lib', 'index.js'), join(sandbox, 'host.js'));
+  try {
+    return { mod: await import(pathToFileURL(join(sandbox, 'host.js'))), cleanup: () => rm(sandbox, { recursive: true, force: true }) };
+  } catch (error) {
+    await rm(sandbox, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** Root context + the four injected services, with inspectable fakes. */
+function createHarness(Context) {
+  // persistence.inspect reports 3 turns and one real user message, so any
+  // listArchivedSessions() bound to a LIVE context yields turnCount 3 and
+  // the derived title '你好'. A stale (dead-context) closure swallows the
+  // ctx.sessionPersistence throw and yields turnCount 0 — the user-visible
+  // symptom these tests pin down.
+  const persistence = {
+    list: async () => [],
+    findLog: async () => undefined,
+    inspect: async () => ({
+      events: [
+        { type: 'turn/start' },
+        { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '你好' }] } },
+        { type: 'turn/start' },
+        { type: 'turn/start' },
+      ],
+    }),
+    delete: async () => { deleted++; },
+  };
+  let deleted = 0;
+  const registry = {
+    requireState: () => ({ archivedSessionIds: ['sess-1'] }),
+    entities: new Map(),
+  };
+  const cache = {};
+  const routeTable = new Map();
+  const webServer = {
+    register(route) {
+      if (routeTable.has(route.path)) {
+        throw new Error('webserver: duplicate ' + route.kind + ' route "' + route.path + '"');
+      }
+      routeTable.set(route.path, route);
+      return () => routeTable.delete(route.path);
+    },
+  };
+  const root = new Context();
+  root.provide('sessionPersistence', persistence);
+  root.provide('sessionProjectionCache', cache);
+  root.provide('workspaceRegistry', registry);
+  root.provide('webServer', webServer);
+  return { root, persistence, registry, cache, routeTable, deletedCount: () => deleted };
+}
+
 describe('SessionTrashHost fiber lifecycle (real cordis)', { skip: !cordisDir && 'no @deepseek-ai/cordis copy found in node_modules/.pnpm' }, () => {
   test('restart keeps the route table consistent; unload unregisters every route', async () => {
     const { Context } = await import(pathToFileURL(join(cordisDir, 'lib', 'index.js')));
-
-    // Sandbox: node_modules/@deepseek-ai/cordis -> discovered copy, plus a
-    // copy of the host lib so its optional cordis import resolves for real.
-    const sandbox = join(repoRoot, '.tmp', `dsh-reload-test-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
-    await mkdir(join(sandbox, 'node_modules', '@deepseek-ai'), { recursive: true });
-    await symlink(cordisDir, join(sandbox, 'node_modules', '@deepseek-ai', 'cordis'), 'dir');
-    await cp(join(repoRoot, 'packages', 'session-trash-host', 'lib', 'index.js'), join(sandbox, 'host.js'));
-
+    const { mod, cleanup } = await importHost();
     try {
-      const { SessionTrashHost } = await import(pathToFileURL(join(sandbox, 'host.js')));
-
-      // Minimal webServer honouring the register() disposer contract, with
-      // the same duplicate-path guard as the real host service.
-      const routeTable = new Map();
-      const webServer = {
-        register(route) {
-          if (routeTable.has(route.path)) {
-            throw new Error(`webserver: duplicate ${route.kind} route "${route.path}"`);
-          }
-          routeTable.set(route.path, route);
-          return () => routeTable.delete(route.path);
-        },
-      };
-
-      const root = new Context();
-      root.provide('sessionPersistence', { list: async () => [] });
-      root.provide('sessionProjectionCache', {});
-      root.provide('workspaceRegistry', {
-        requireState: () => ({ archivedSessionIds: [] }),
-        entities: new Map(),
-      });
-      root.provide('webServer', webServer);
-
-      const fiber = root.plugin(SessionTrashHost);
+      const h = createHarness(Context);
+      const fiber = h.root.plugin(mod.SessionTrashHost);
       await fiber;
-      const mounted = routeTable.size;
-      assert.ok(mounted >= 8, `expected the full route set at mount, got ${mounted}`);
-      assert.ok(root.get('sessionTrashHost'), 'service should be provided at mount');
+      const mounted = h.routeTable.size;
+      assert.ok(mounted >= 8, 'expected the full route set at mount, got ' + mounted);
+      assert.ok(h.root.get('sessionTrashHost'), 'service should be provided at mount');
+      assert.equal(typeof h.registry.listArchivedSessions, 'function', 'registry methods should be patched at mount');
 
       // In-process reload — what 'dsh plugin install' triggers on a running
       // web process. Must not throw duplicate-route and must re-register.
       await fiber.restart();
       await fiber;
-      assert.equal(routeTable.size, mounted, 'restart must neither leak nor lose routes');
-      assert.ok(root.get('sessionTrashHost'), 'service should be re-provided after restart');
+      assert.equal(h.routeTable.size, mounted, 'restart must neither leak nor lose routes');
+      assert.ok(h.root.get('sessionTrashHost'), 'service should be re-provided after restart');
+      assert.equal((await h.registry.listArchivedSessions())[0].turnCount, 3, 'turn counts must survive a restart');
 
-      // Full unload must unregister every route (register() disposer contract).
+      // Full unload must unregister every route AND reverse the service
+      // patches (register() disposer contract + token-tagged patch removal).
       await fiber.dispose();
-      assert.equal(routeTable.size, 0, 'unload must unregister every route');
+      assert.equal(h.routeTable.size, 0, 'unload must unregister every route');
+      assert.equal(h.registry.listArchivedSessions, undefined, 'unload must remove the patched registry methods');
+      assert.equal(h.cache.remove, undefined, 'unload must remove the patched cache.remove');
+      assert.equal(typeof h.persistence.delete, 'function', 'persistence.delete must stay a function after restore');
     } finally {
-      await rm(sandbox, { recursive: true, force: true });
+      await cleanup();
+    }
+  });
+
+  test('uninstall + reinstall keeps listArchivedSessions on the live context (turn counts survive)', async () => {
+    const { Context } = await import(pathToFileURL(join(cordisDir, 'lib', 'index.js')));
+    const { mod, cleanup } = await importHost();
+    try {
+      const h = createHarness(Context);
+
+      // First install.
+      const fiberA = h.root.plugin(mod.SessionTrashHost);
+      await fiberA;
+      assert.equal((await h.registry.listArchivedSessions())[0].turnCount, 3, 'first install must count turns');
+
+      // Uninstall (fiber A fully unloads; the loader then mounts a NEW fiber,
+      // exactly like 'dsh plugin uninstall' + 'dsh plugin install').
+      await fiberA.dispose();
+      assert.equal(h.routeTable.size, 0, 'uninstall must unregister every route');
+      assert.equal(h.registry.listArchivedSessions, undefined, 'uninstall must remove the patched registry methods');
+
+      // Reinstall — a brand-new fiber. On the broken (<= v0.3.1) code the
+      // stale listArchivedSessions closure survived and read 0 turns.
+      const fiberB = h.root.plugin(mod.SessionTrashHost);
+      await fiberB;
+      assert.ok(h.routeTable.size >= 8, 'reinstall must re-register the routes');
+      assert.ok(h.root.get('sessionTrashHost'), 'service must be re-provided after reinstall');
+      const items = await h.registry.listArchivedSessions();
+      assert.equal(items[0].turnCount, 3, 'turn counts must survive uninstall+reinstall');
+      assert.equal(items[0].title, '你好', 'derived titles must survive uninstall+reinstall');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('mounting over stale (<= v0.3.1) registry methods heals them in place', async () => {
+    const { Context } = await import(pathToFileURL(join(cordisDir, 'lib', 'index.js')));
+    const { mod, cleanup } = await importHost();
+    try {
+      const h = createHarness(Context);
+
+      // Simulate the state a <= v0.3.1 fiber leaves behind on uninstall:
+      // untagged registry methods whose closures hold a DEAD context — their
+      // listArchivedSessions silently degrades to turnCount 0 (the running
+      // production symptom after the local->online reinstall).
+      h.registry.archiveSession = async () => {};
+      h.registry.unarchiveSession = async () => {};
+      h.registry.permanentlyDeleteSession = async () => {};
+      h.registry.emptyArchivedSessions = async () => ({ deletedCount: 0 });
+      h.registry.listArchivedSessions = async () => [{ sessionId: 'sess-1', turnCount: 0 }];
+
+      const fiber = h.root.plugin(mod.SessionTrashHost);
+      await fiber;
+
+      const items = await h.registry.listArchivedSessions();
+      assert.equal(items[0].turnCount, 3, 'a fresh install must replace the stale dead-context methods');
+      assert.equal(items[0].title, '你好', 'a fresh install must restore derived titles');
+
+      await fiber.dispose();
+      assert.equal(h.routeTable.size, 0, 'unload must unregister every route');
+    } finally {
+      await cleanup();
     }
   });
 });
