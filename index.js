@@ -61,8 +61,6 @@ export const inject = ['sessionPersistence', 'workspaceRegistry', 'webServer'];
 
 /**
  * Mount the host service. Runs only after the injected services are up.
- * Returns (a promise settling after) the plugin fiber, so loaders and
- * tests can await a fully started instance.
  * @param {import('@deepseek-ai/cordis').Context} ctx
  */
 export async function apply(ctx) {
@@ -72,5 +70,9 @@ export async function apply(ctx) {
   const mod = await loadImpl();
   // Re-check after the await: a concurrent apply may have mounted meanwhile.
   if (ctx.get('sessionTrashHost')) return;
-  return ctx.plugin(mod.SessionTrashHost);
+  // NOTE: deliberately NOT returned. A returned fiber is a thenable whose
+  // resolved value is the fiber object itself, which cordis's effect
+  // collector rejects with "Invalid effect" at boot; returning undefined
+  // keeps the battle-tested pre-shim behaviour.
+  ctx.plugin(mod.SessionTrashHost);
 }

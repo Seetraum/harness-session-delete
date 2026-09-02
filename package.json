@@ -14,7 +14,8 @@
     "client.js",
     "client.css",
     "cordis.patch.yml",
-    "packages"
+    "packages/session-trash-host/lib",
+    "packages/session-trash-host/package.json"
   ],
   "license": "MIT",
   "keywords": [

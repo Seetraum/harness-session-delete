@@ -263,7 +263,7 @@ describe('SessionTrashHost fiber lifecycle (real cordis)', { skip: !cordisDir &&
     try {
       // First mount: the bundle on disk is the repo's current code.
       const h1 = createHarness(Context);
-      await shimFirst.apply(h1.root);
+      await h1.root.plugin(shimFirst);
       assert.ok(h1.routeTable.has('/api/session-trash/list'), 'the shim must mount the impl and register its routes');
       assert.ok(h1.root.get('sessionTrashHost'), 'the shim must provide the service');
 
@@ -280,7 +280,7 @@ describe('SessionTrashHost fiber lifecycle (real cordis)', { skip: !cordisDir &&
       assert.equal(shimSecond, shimFirst, 'the shim module must come from the ESM cache (same object)');
 
       const h2 = createHarness(Context);
-      await shimSecond.apply(h2.root);
+      await h2.root.plugin(shimSecond);
       assert.ok(h2.routeTable.has('/api/session-trash-v2/list'), 'the cached shim must load the NEW impl from disk');
       assert.ok(!h2.routeTable.has('/api/session-trash/list'), 'the new mount must not register the old build\'s routes');
       assert.ok(h2.root.get('sessionTrashHost'), 'the new impl must provide the service');
