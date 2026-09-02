@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.3.3] - 2026-09-02
+
+### Fixed
+
+- **Overwrite-installing a new version over a running dsh web kept executing the OLD code, so the recycle-bin list stayed at "0 轮对话" no matter what was fixed.** Three stacked reasons, now worked around plugin-side: dshmarket only hot-mounts NEWLY-ADDED packages (an install over an existing name never live-activates); every live-activation path (market hot mount, loader entry update) imports this package by the same module URL, so Node's ESM cache keeps returning the first module object the process ever loaded; and a same-name loader entry update reuses the previous runtime callback outright. `index.js` is now a BYTE-STABLE loader shim whose `apply()` imports the implementation through `?<sha256-of-file>`: identical content reuses the cached module, changed content (a new version on disk) gets a fresh URL and therefore fresh code — so after one restart onto this shim, an uninstall → install (or market disable → enable) swaps plugin versions in-process without a restart. A plain overwrite-install still requires a restart — that is dshmarket's activation design, outside plugin control. The shim file itself must never change again; all version-to-version changes live in the implementation file.
+- **A registry patch leaked by an older fiber now keeps working instead of degrading to 0 turns.** `patchWorkspaceRegistry` snapshots `sessionPersistence` at patch time, so `listArchivedSessions()` / `permanentlyDeleteSession()` no longer resolve services through the (possibly dead) context accessor at call time — the exact throw that was silently zeroing turn counts. Safe `ctx.get(...)` lookups stay dynamic.
+
+### Added
+
+- Lifecycle regression tests: a leaked `listArchivedSessions` reference must keep counting turns after its fiber unloads, and the entry shim — imported from the ESM cache — must mount the impl CURRENTLY on disk after the impl file is replaced (both fail on v0.3.2).
+
 ## [0.3.2] - 2026-09-02
 
 ### Fixed

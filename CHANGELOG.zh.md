@@ -7,6 +7,17 @@
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.3.3] - 2026-09-02
+
+### 修复
+
+- **对运行中的 dsh web 覆盖安装新版本后，进程里跑的仍是旧代码——回收站列表因此一直显示“0 轮对话”，修什么都无效。** 三层原因叠加，现已在插件侧绕过：dshmarket 只对“新增包”做热挂载（对已安装同名包的安装从不热激活）；所有热激活路径（market 热挂载、loader entry 更新）都以同一模块 URL 导入本包，Node 的 ESM 缓存永远返回进程最早加载的那个模块对象；loader 的同名 entry 更新更是直接复用旧的 runtime callback。`index.js` 现在是一个**字节级稳定的加载 shim**，其 `apply()` 通过 `?<文件sha256>` 导入实现文件：内容相同则复用缓存模块，内容变化（磁盘上装了新版本）则获得全新 URL、加载全新代码——因此**重启一次进入本 shim 后**，卸载→安装（或市场里停用→启用）即可在进程内换版本、无需重启。纯覆盖安装仍需重启——那是 dshmarket 的激活设计，非插件可控。shim 文件本身今后永不再改；所有版本间变更都放在实现文件里。
+- **旧 fiber 泄漏的 registry 补丁现在能继续正常工作，而不再退化为 0 轮。** `patchWorkspaceRegistry` 改为打补丁时快照 `sessionPersistence`，`listArchivedSessions()` / `permanentlyDeleteSession()` 不再在调用时经（可能已死的）ctx 访问器解析服务——正是那个被静默吞掉、把轮数归零的抛错。安全的 `ctx.get(...)` 查找保持动态。
+
+### 新增
+
+- 生命周期回归测试：泄漏的 `listArchivedSessions` 引用在其 fiber 卸载后必须仍能数出轮数；入口 shim（从 ESM 缓存取得）在实现文件被替换后必须挂载**磁盘上当前**的实现（两项在 v0.3.2 上均失败）。
+
 ## [0.3.2] - 2026-09-02
 
 ### 修复

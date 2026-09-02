@@ -185,6 +185,14 @@ function patchProjectionCacheRemove(cache) {
 function patchWorkspaceRegistry(registry, ctx) {
   if (!registry) return null;
   const token = Symbol('dsh-session-trash.registryPatch');
+  // Snapshot the services the patched methods need while THIS fiber is live.
+  // The methods are installed on the SHARED registry object and may outlive
+  // this fiber (a pre-v0.3.2 install could leak them); resolving services
+  // through ctx at call time would then hit the dead-fiber guard
+  // ("cannot get required service ... in inactive context") and silently
+  // zero the turn counts. ctx.get(...) is a safe non-throwing accessor, so
+  // the remaining per-call lookups below stay dynamic on purpose.
+  const persistence = ctx.sessionPersistence;
   const runInQueue = (fn) => {
     if (typeof registry.enqueueOperation === 'function') {
       return registry.enqueueOperation(fn);
@@ -247,7 +255,6 @@ function patchWorkspaceRegistry(registry, ctx) {
     // removed), `logFound` stays false.
     let logFound = false;
     try {
-      const persistence = ctx.sessionPersistence;
       const logPath = typeof persistence?.findLog === 'function'
         ? await persistence.findLog(sessionId)
         : undefined;
@@ -391,7 +398,7 @@ function patchWorkspaceRegistry(registry, ctx) {
 
     let headers = [];
     try {
-      headers = (await ctx.sessionPersistence?.list?.()) ?? [];
+      headers = (await persistence?.list?.()) ?? [];
     } catch {
       // Persistence list fallback
     }
@@ -424,7 +431,6 @@ function patchWorkspaceRegistry(registry, ctx) {
         let derivedTitle = '';
 
         try {
-          const persistence = ctx.sessionPersistence;
           const logPath = typeof persistence?.findLog === 'function' ? await persistence.findLog(sessionId) : undefined;
           if (logPath) {
             const fileStat = await stat(logPath).catch(() => null);

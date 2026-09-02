@@ -62,6 +62,36 @@ async function importHost() {
   }
 }
 
+/**
+ * Build a sandbox with the INSTALLED-BUNDLE layout: the entry shim at
+ * node_modules/dsh-session-recycle-bin/index.js plus the impl beneath it,
+ * with cordis resolvable. Re-importing the same shim URL from this process
+ * then reproduces exactly what a running dsh web does across reinstalls:
+ * the shim module object comes from the ESM cache, and only the shim's
+ * content-hash-busted impl import can deliver the files currently on disk.
+ */
+async function importBundleShim() {
+  const sandbox = join(repoRoot, '.tmp', 'dsh-reload-test-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7));
+  const pkgDir = join(sandbox, 'node_modules', 'dsh-session-recycle-bin');
+  await mkdir(join(pkgDir, 'packages', 'session-trash-host', 'lib'), { recursive: true });
+  await mkdir(join(sandbox, 'node_modules', '@deepseek-ai'), { recursive: true });
+  await symlink(cordisDir, join(sandbox, 'node_modules', '@deepseek-ai', 'cordis'), 'dir');
+  await cp(join(repoRoot, 'index.js'), join(pkgDir, 'index.js'));
+  await cp(join(repoRoot, 'packages', 'session-trash-host', 'lib', 'index.js'), join(pkgDir, 'packages', 'session-trash-host', 'lib', 'index.js'));
+  const shimUrl = pathToFileURL(join(pkgDir, 'index.js'));
+  try {
+    return {
+      shimUrl,
+      mod: await import(shimUrl),
+      implPath: join(pkgDir, 'packages', 'session-trash-host', 'lib', 'index.js'),
+      cleanup: () => rm(sandbox, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    await rm(sandbox, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 /** Root context + the four injected services, with inspectable fakes. */
 function createHarness(Context) {
   // persistence.inspect reports 3 turns and one real user message, so any
@@ -195,6 +225,65 @@ describe('SessionTrashHost fiber lifecycle (real cordis)', { skip: !cordisDir &&
 
       await fiber.dispose();
       assert.equal(h.routeTable.size, 0, 'unload must unregister every route');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('a leaked listArchivedSessions keeps working (patch-time service snapshot)', async () => {
+    const { Context } = await import(pathToFileURL(join(cordisDir, 'lib', 'index.js')));
+    const { mod, cleanup } = await importHost();
+    try {
+      const h = createHarness(Context);
+      const fiber = h.root.plugin(mod.SessionTrashHost);
+      await fiber;
+      assert.equal((await h.registry.listArchivedSessions())[0].turnCount, 3);
+
+      // Keep a reference to the patched method, then fully unload the plugin
+      // fiber — the reference simulates a method leaked onto the shared
+      // registry by an older bundle. v0.3.3 snapshots persistence at patch
+      // time, so the leaked method must keep counting turns; the per-call
+      // ctx.sessionPersistence variant instead swallowed the dead-fiber throw
+      // and reported 0 (the production symptom).
+      const leakedList = h.registry.listArchivedSessions;
+      await fiber.dispose();
+      assert.equal(h.registry.listArchivedSessions, undefined, 'unload must remove the patched methods');
+      const items = await leakedList();
+      assert.equal(items[0].turnCount, 3, 'a leaked patch must stay functional (no dead-context throw)');
+      assert.equal(items[0].title, '你好', 'a leaked patch must keep deriving titles');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('the entry shim loads the impl CURRENTLY on disk despite the ESM module cache', async () => {
+    const { Context } = await import(pathToFileURL(join(cordisDir, 'lib', 'index.js')));
+    const { readFile, writeFile: writeImplFile } = await import('node:fs/promises');
+    const { mod: shimFirst, shimUrl, implPath, cleanup } = await importBundleShim();
+    try {
+      // First mount: the bundle on disk is the repo's current code.
+      const h1 = createHarness(Context);
+      await shimFirst.apply(h1.root);
+      assert.ok(h1.routeTable.has('/api/session-trash/list'), 'the shim must mount the impl and register its routes');
+      assert.ok(h1.root.get('sessionTrashHost'), 'the shim must provide the service');
+
+      // Simulate an overwrite-install: REPLACE the impl file on disk with a
+      // different build (recognisable route prefix), while the process keeps
+      // running — then re-import the shim by the SAME URL. Node's ESM cache
+      // returns the cached shim object (asserted below), so only the shim's
+      // content-hash-busted impl import can pick up the new file.
+      const implSource = await readFile(implPath, 'utf8');
+      assert.ok(implSource.includes("const ROUTE_PREFIX = '/api/session-trash';"), 'impl copy must carry the stock route prefix');
+      await writeImplFile(implPath, implSource.replace("const ROUTE_PREFIX = '/api/session-trash';", "const ROUTE_PREFIX = '/api/session-trash-v2';"));
+
+      const shimSecond = await import(shimUrl);
+      assert.equal(shimSecond, shimFirst, 'the shim module must come from the ESM cache (same object)');
+
+      const h2 = createHarness(Context);
+      await shimSecond.apply(h2.root);
+      assert.ok(h2.routeTable.has('/api/session-trash-v2/list'), 'the cached shim must load the NEW impl from disk');
+      assert.ok(!h2.routeTable.has('/api/session-trash/list'), 'the new mount must not register the old build\'s routes');
+      assert.ok(h2.root.get('sessionTrashHost'), 'the new impl must provide the service');
     } finally {
       await cleanup();
     }
