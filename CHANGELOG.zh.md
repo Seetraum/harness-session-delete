@@ -7,6 +7,48 @@
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.4.4] - 2026-09-12
+
+### 修复
+
+- **「设置 → 会话回收站」看起来消失的真正原因：导航行被渲染在可视区之外、被裁掉了 —— 注册其实一直是好的。** 设置面板把导航列的高度固定为约 808px（17 行 × 44px）：面板自身 `overflow: hidden`，导航列 `overflow: visible`，且没有滚动条。只要窗口高度放不下整个面板，**这一列的尾部就会被直接裁掉，并且滚不到**。我们这条注册用的是 `order: 200`，也就是倒数第二行，于是任何矮于约 800px 的窗口上它都会彻底消失；而会话头部的删除按钮（session 作用域）与侧边栏行按钮始终正常。正是这种“半边好半边坏”的反差，使它连续三个版本都被误判成注册问题。
+
+  在线上宿主实测（`dsh web`，DSH 0.1.5-rc.2，1440×800 视口）：该项 `top: 748px / bottom: 788px`，距离底边只剩 12px；到 700px 视口时已是 `bottom: 788 > 700` —— 既看不见也够不到。而槽账本里这条注册一直都在，用别的方式打开该分节时面板也能正常渲染。
+
+  现在 `order` 取 **25**，落在 `20`（dsh-mnemon「Memory System」）与 `30`（dsh-cost-meter「Cost」）之间，属于最上面几行，正常窗口不可能裁到。`order` 在两代际都只是普通数字，0.1.1-rc.2 / 0.1.2-rc.1 不受影响。
+
+- **`tests/client-header-action.test.js` 现固化了这个位置**，防止该条目日后再悄悄漂回被裁掉的区间：测试夹具会记录注册项参数，新增用例断言显式数字 `order < 100` 以及 `id`/`label` 契约。
+
+### 备注
+
+- 0.4.1（去掉契约外的 `icon`/`iconName`/`Icon`/`renderIcon`）、0.4.2（`dsh.client.inject` 声明 `@deepseek-ai/dsh-client-ui-settings` / `@deepseek-ai/dsh-client-ui-conversation`）、0.4.3（从 `exports.inject` 去掉未被提供的 `typert`）各自消除了与 0.1.5 契约的真实偏差，故予以保留；但**它们都不是导航项消失的原因** —— 那条注册始终都在，只是一直被裁掉。本次的位置调整才是修复用户所报症状的改动。
+- 裁切本身是**宿主缺陷**（`dsh-client-ui-settings-general`：`nav { overflow: visible }` 套在 `panel { overflow: hidden }` 里，行栈固定 808px，且不可滚动）。它会让所有 order 偏大的分节都丢掉末尾一到两行。建议向上游反馈；本插件刻意不去改宿主的 DOM。
+
+## [0.4.3] - 2026-09-12
+
+### 修复
+
+- **DSH 0.1.5 上设置里的「会话回收站」仍然不出现（0.4.2 未解决的真实根因）。** 根因：`client.js` 中声明了 `exports.inject = ['slots', 'connection', 'typert', 'sessions', 'workspaces']`。在 DSH 0.1.5 的 Web 客户端中，`typert` 已不再作为浏览器端的 Cordis Service 提供（该包甚至未被打包进 Web bundle）。Cordis 规则要求 `inject` 数组里的所有服务必须被提供，否则该插件的 Fiber 会被永久标记为 `INACTIVE`（`epoch = INACTIVE`），导致客户端的 `apply(ctx)` 根本未被调用——槽注册（`settings.section` 和会话删除按钮）、样式注入及侧边栏删除按钮初始化完全被挂起。现将 `exports.inject` 移除不存在的 `typert`，并将内部事件监听安全降级为 `ctx?.get?.('typert')?.on?.(...)`。
+
+## [0.4.2] - 2026-09-12
+
+### 修复
+
+- **DSH 0.1.5 上设置里的「会话回收站」始终不出现，回收站管理器因此完全无法进入。** 根因：`dsh.client.inject` 为空。该字段是客户端模块图的依赖声明，**所有**向设置/槽系统贡献内容的第三方插件都在此声明宿主模块——`dsh-mnemon`、`dshmarket`、`dsh-context`、`dsh-vision-router`、`@anweat/dsh-browser` 均列有 `@deepseek-ai/dsh-client-ui-settings`，`dsh-better-sidebar`、`dsh-at-file` 列有 `@deepseek-ai/dsh-client-ui-slots`。我们声明的是 `[]`，于是客户端 fiber 在设置模块的上下文之外构建：session 作用域的槽（会话头部删除按钮）照常工作，而 root 作用域的 `settings.section` 注册**被静默地不接纳**——控制台无任何报错，导航项就是不存在。现声明 `@deepseek-ai/dsh-client-ui-settings` 与 `@deepseek-ai/dsh-client-ui-conversation`；并对照线上 `__DSH_BOOT__` 模块图核实：我们的那一行是**唯一** inject 为空的设置/槽贡献者。
+
+### 备注
+
+- 保留 0.4.1 的改动：从 `settings.section` 注册中去掉契约外的 `icon`/`iconName`/`Icon`/`renderIcon`（0.1.5 的导航行契约只有 `{ id, order, label }`）。它并非根因（mnemon 多传字段也能工作），但使注册与官方示例一致。
+
+## [0.4.1] - 2026-09-12
+
+### 修复
+
+- **DSH 0.1.5 上设置里的「会话回收站」整项消失。** `settings.section` 的注册额外传了 `icon` / `iconName` / `Icon` / `renderIcon`。0.1.5 的设置导航行契约只有 `{ id, order, label }` —— `dsh-cordis-client-runner` 内置的 slot 目录在 `registerOptions` 里恰好只列了 `id`（必填）、`order`、`label`（`string | (() => string)`），而那些图标字段属于 0.1.5 之前「每行渲染一个字形」的旧导航。多传这些字段会让整条注册被**静默丢弃**：控制台不报错，导航项就是不出现。现只保留契约内字段。`label` 仍是 thunk——两个代际都接受（“thunk 在每次投影时被重新读取”）。这是唯一一条多传字段的注册，也正是侧边栏行图标与会话头部删除按钮一直正常、唯独它消失的原因。
+
+### 备注
+
+- DSH ≤ 0.1.2 的外观取舍：该代际的设置导航字形读自同一条注册，因此那里现在会渲染成不带自定义垃圾桶图标的条目。功能不受影响（0.1.5 的导航根本没有图标位）。
 ## [0.4.0] - 2026-09-12
 
 ### 修复

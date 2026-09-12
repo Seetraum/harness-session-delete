@@ -547,7 +547,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         loadItems();
         const offEvent = ctx?.on?.('workspace/archived-sessions-changed', () => loadItems());
-        const offRpc = ctx?.typert?.on?.('host/archived-sessions-changed', () => loadItems());
+        const offRpc = ctx?.get?.('typert')?.on?.('host/archived-sessions-changed', () => loadItems());
         const offPurge = ctx?.on?.('workspace/session-permanently-deleted', ({ sessionId }) => {
           if (sessionId) purgeFromBrowserSessionStore(ctx, [sessionId]);
           loadItems();
@@ -1330,17 +1330,25 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       injectStylesheet();
 
+      // DSH 0.1.5 的 settings.section 注册契约只接受 id / order / label
+      // （见 dsh-cordis-client-runner 内置的 slot 目录：registerOptions 就这三项，
+      //  label 的类型是 `string | (() => string)`）。设置面板按 order 升序把注册项
+      //  排成一列，所以这里只传契约内字段；label 仍用 thunk，两代际都合法。
+      //
+      // order 必须落在「一定可见」的区间：0.1.5 的设置面板把导航列高度固定为约
+      // 808px（17 项 × 44px），而面板 overflow:hidden、导航列 overflow:visible 且
+      // 没有滚动条 —— 窗口可视高度放不下整个面板时，**列表末尾的条目会被直接裁掉，
+      // 既看不见也滚不到**。原先取 200（倒数第二项），窗口稍矮（面板 < 808px，
+      // 约等于视口 < 800px）就整项消失，这正是「设置里没有会话回收站」的真正原因。
+      // 25 落在 20（mnemon「Memory System」）与 30（cost-meter「Cost」）之间，
+      // 属于最上面几项，任何能看见设置导航的窗口都能看见它。
       ctx.slots.inject('settings.section', () =>
         ctx.slots.register(
           {
             name: 'settings.section',
             id: 'trash',
-            order: 200,
+            order: 25,
             label: () => '会话回收站',
-            icon: renderTrashIcon({ width: 16, height: 16 }),
-            iconName: 'trash',
-            Icon: TrashIcon,
-            renderIcon: () => renderTrashIcon(),
           },
           (props) => TrashTab({ ...props, ctx })
         )
@@ -1362,7 +1370,7 @@ window.__ModuleLoader__.load({
     }
 
     exports.apply = apply;
-    exports.inject = ['slots', 'connection', 'typert', 'sessions', 'workspaces'];
+    exports.inject = ['slots', 'connection', 'sessions', 'workspaces'];
 
     return module.exports;
   },

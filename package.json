@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-recycle-bin",
-  "version": "0.4.0",
+  "version": "0.4.4",
   "description": "DSH 会话回收站：侧边栏删除图标、回收站多选还原/彻底删除、活跃会话保护。 · Session trash & permanent delete for DeepSeek Harness.",
   "type": "module",
   "main": "index.js",
@@ -43,7 +43,10 @@
     },
     "client": {
       "platform": "web",
-      "inject": []
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
     }
   },
   "scripts": {

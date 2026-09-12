@@ -69,6 +69,7 @@ function loadClient() {
     useEffect: () => {}, useMemo: (f) => f(), useCallback: (f) => f, useRef: (v) => ({ current: v }),
   };
   const registrations = {};
+  const registrationOptions = {};
   const ctx = {
     effect: (fn) => { try { fn(); } catch { /* stub */ } },
     get: () => undefined,
@@ -80,12 +81,12 @@ function loadClient() {
     workspaces: { list: { getSnapshot: () => ({ archivedSessionIds: [] }) }, refresh: () => {} },
     slots: {
       inject: (name, fn) => { fn(); },
-      register: (opts, component) => { registrations[opts.name] = component; return () => {}; },
+      register: (opts, component) => { registrations[opts.name] = component; registrationOptions[opts.name] = opts; return () => {}; },
     },
   };
   const mod = definition.factory((name) => (name === 'react' ? React : {}));
   mod.apply(ctx);
-  return { registrations, ctx };
+  return { registrations, registrationOptions, ctx };
 }
 
 /** Invoke the header action's click handler and report the archive request. */
@@ -130,4 +131,44 @@ describe('client header action (dual cohort)', () => {
     const moduleLevel = offenders.filter(({ line }) => /^ {4}\S/.test(line));
     assert.deepEqual(moduleLevel, [], 'module-level code must not call the component-scoped currentTitle');
   });
+
+  test('settings.section registration stays inside the always-visible nav band', () => {
+    // DSH 0.1.5's settings panel pins its nav column to ~808px and clips the overflow:
+    // the panel is overflow:hidden, the nav column overflow:visible, and there is no
+    // scrollbar. Anything registered late enough to land at the bottom of that column
+    // disappears on any window shorter than the panel — which is exactly why the
+    // "会话回收站" entry was invisible while its registration was perfectly healthy.
+    // Keep the order small so the entry sits in the top few rows.
+    const { registrationOptions } = loadClient();
+    const opts = registrationOptions['settings.section'];
+    assert.ok(opts, 'settings.section must register');
+    assert.equal(opts.id, 'trash');
+    assert.equal(typeof opts.order, 'number', 'order must be an explicit number');
+    assert.ok(
+      opts.order < 100,
+      `settings.section order must stay in the always-visible band (<100), got ${opts.order}:`
+      + ' the host clips the tail of a fixed-height, non-scrollable nav column'
+    );
+    assert.equal(typeof opts.label, 'function', 'label thunk is accepted by both cohorts');
+    assert.equal(opts.label(), '会话回收站');
+  });
+
+  test('client exports.inject must not declare unprovided services like typert (0.1.5 regression)', async () => {
+    let definition = null;
+    const documentStub = {
+      head: { appendChild() {} },
+      getElementById: () => null,
+      createElement: () => ({ setAttribute() {}, appendChild() {} }),
+      querySelectorAll: () => [],
+    };
+    const win = { __ModuleLoader__: { load(def) { definition = def; } } };
+    const code = readFileSync(CLIENT, 'utf8');
+    new Function('window', 'document', code)(win, documentStub);
+    const mod = definition.factory(() => ({}));
+
+    assert.ok(Array.isArray(mod.inject), 'exports.inject must be an array');
+    assert.ok(!mod.inject.includes('typert'), 'typert is not provided in DSH 0.1.5 client runtime; must not be in exports.inject');
+    assert.ok(mod.inject.includes('slots'), 'slots service must be declared');
+  });
 });
+
