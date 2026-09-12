@@ -50,6 +50,142 @@ function notifyArchivedSessionsChanged(ctx, archivedSessionIds) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Dual-cohort helpers (DSH 0.1.1-rc.2 / 0.1.2-rc.1 / 0.1.5-rc.1)     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Normalize one item from persistence.list() across host cohorts.
+ * 0.1.1/0.1.2 list() returns SessionHeader[] (the header itself); 0.1.5
+ * returns SessionPersistenceSnapshot[] ({ header, revision, ... }). Both
+ * expose the durable SessionHeader, just at different depths.
+ * @param {object|undefined} item
+ * @returns {object|undefined} the SessionHeader (with .id/.title/.cwd).
+ */
+function normalizeStoredHeader(item) {
+  if (!item) return undefined;
+  if (typeof item.id === 'string') return item; // older cohort: raw header
+  if (item.header && typeof item.header.id === 'string') return item.header; // 0.1.5 snapshot
+  return undefined;
+}
+
+/**
+ * Resolve one session's physical log path across host cohorts.
+ *
+ * Priority:
+ *  1. persistence.findLog(id)      — older host service method (0.1.1/0.1.2:
+ *                                    a path string; 0.1.5: a generation
+ *                                    descriptor — both normalized here).
+ *  2. persistence.locate({id})     — older service API; still present on the
+ *                                    jsonl backend in 0.1.5 ({kind, path}).
+ *  3. physical directory scan      — the stable on-disk contract across every
+ *                                    0.1.x host: ~/.dsh/sessions/<project>/<sessionId>/session*.jsonl*.
+ *                                    This is host-API-independent and also the
+ *                                    only mechanism that works when the service
+ *                                    stops forwarding locate (0.1.5).
+ * @param {object|undefined} persistence ctx.sessionPersistence
+ * @param {string} sessionId
+ * @returns {Promise<string|undefined>} resolved log path, or undefined.
+ */
+async function resolveSessionLogPath(persistence, sessionId) {
+  // findLog is the AUTHORITATIVE resolver on older hosts: a returned path —
+  // even when the file is already gone — means this session has a log
+  // location (permanentlyDeleteSession then keeps the workspace slot); a
+  // missing answer means the session is a ghost with no log known at all.
+  // Its answer is therefore returned verbatim. locate() is a CANDIDATE path
+  // computation that never checks existence, so a located candidate counts
+  // only when the file is actually there. The physical scan returns only
+  // files that exist.
+  try {
+    if (typeof persistence?.findLog === 'function') {
+      const found = await persistence.findLog(sessionId);
+      // 0.1.1/0.1.2 return the log path directly; 0.1.5 returns a generation
+      // descriptor ({ sourcePath, sourceVersion, currentPath }) — verified
+      // against the real 0.1.5 jsonl backend in the sandbox harness.
+      const resolved = typeof found === 'string'
+        ? found
+        : (found?.currentPath ?? found?.sourcePath);
+      if (typeof resolved === 'string' && resolved) return resolved;
+    }
+  } catch { /* fall through */ }
+
+  try {
+    if (typeof persistence?.locate === 'function') {
+      const loc = persistence.locate({ id: sessionId });
+      const candidate = loc?.path ?? (typeof loc === 'string' ? loc : undefined);
+      if (candidate && await fileExists(candidate)) return candidate;
+    }
+  } catch { /* fall through */ }
+
+  return scanSessionLogPath(sessionId);
+}
+
+/** True when the path names a regular file on disk. */
+async function fileExists(path) {
+  if (!path) return false;
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Physical directory scan for a session log file. Layout (all 0.1.x hosts):
+ *   ~/.dsh/sessions/<workspace-path-encoded>/<sessionId>/session.jsonl
+ *   ~/.dsh/sessions/<workspace-path-encoded>/<sessionId>/session.v{1..3}.jsonl
+ * plus the optional .zstd compression suffix. Recognises both the legacy
+ * plain name and the 0.1.5 versioned generations.
+ * @param {string} sessionId
+ * @returns {Promise<string|undefined>}
+ */
+async function scanSessionLogPath(sessionId) {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  if (!home) return undefined;
+  const root = join(home, '.dsh', 'sessions');
+  try {
+    const projects = await readdir(root);
+    for (const project of projects) {
+      const sessionDir = join(root, project, sessionId);
+      const names = await readdir(sessionDir).catch(() => []);
+      const logName = names.find((n) => /^session(?:.v\d+)?\.jsonl(?:\.zstd)?$/.test(n));
+      if (logName) return join(sessionDir, logName);
+    }
+  } catch { /* best effort */ }
+  return undefined;
+}
+
+/**
+ * Read one stored session's events across host cohorts.
+ *  1. persistence.inspect(id)      — older host (0.1.1/0.1.2) returns { events }.
+ *  2. persistence.open(id) → handle.read() → { events }  — 0.1.5 handle API.
+ * @param {object|undefined} persistence ctx.sessionPersistence
+ * @param {string} sessionId
+ * @returns {Promise<Array|undefined>} the event array, or undefined.
+ */
+async function readSessionEvents(persistence, sessionId) {
+  try {
+    if (typeof persistence?.inspect === 'function') {
+      const stored = await persistence.inspect(sessionId);
+      if (stored && Array.isArray(stored.events)) return stored.events;
+    }
+  } catch { /* fall through */ }
+
+  try {
+    if (typeof persistence?.open === 'function') {
+      const handle = await persistence.open(sessionId);
+      try {
+        const result = await handle.read();
+        if (result && Array.isArray(result.events)) return result.events;
+      } finally {
+        if (typeof handle?.close === 'function') await handle.close().catch(() => {});
+      }
+    }
+  } catch { /* fall through */ }
+
+  return undefined;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Patch: SessionPersistence.delete(id)                               */
 /*  Adds physical deletion and memory index cleanup.                     */
 /* ------------------------------------------------------------------ */
@@ -91,7 +227,7 @@ function patchSessionPersistenceDelete(persistence) {
     }
 
     try {
-      const logPath = typeof this.findLog === 'function' ? await this.findLog(id) : undefined;
+      const logPath = await resolveSessionLogPath(this, id);
       if (logPath) {
         const sessionDir = dirname(logPath);
         await rm(sessionDir, { recursive: true, force: true });
@@ -255,9 +391,7 @@ function patchWorkspaceRegistry(registry, ctx) {
     // removed), `logFound` stays false.
     let logFound = false;
     try {
-      const logPath = typeof persistence?.findLog === 'function'
-        ? await persistence.findLog(sessionId)
-        : undefined;
+      const logPath = await resolveSessionLogPath(persistence, sessionId);
       if (logPath) {
         logFound = true;
         const sessionDir = dirname(logPath);
@@ -398,7 +532,7 @@ function patchWorkspaceRegistry(registry, ctx) {
 
     let headers = [];
     try {
-      headers = (await persistence?.list?.()) ?? [];
+      headers = ((await persistence?.list?.()) ?? []).map(normalizeStoredHeader).filter(Boolean);
     } catch {
       // Persistence list fallback
     }
@@ -431,7 +565,7 @@ function patchWorkspaceRegistry(registry, ctx) {
         let derivedTitle = '';
 
         try {
-          const logPath = typeof persistence?.findLog === 'function' ? await persistence.findLog(sessionId) : undefined;
+          const logPath = await resolveSessionLogPath(persistence, sessionId);
           if (logPath) {
             const fileStat = await stat(logPath).catch(() => null);
             if (fileStat) {
@@ -439,11 +573,11 @@ function patchWorkspaceRegistry(registry, ctx) {
               fileSize = fileStat.size;
             }
           }
-          // 使用 persistence.inspect() 读取已解压的会话事件（DSH 默认启用 Zstd 压缩，
-          // 直接 readFile 读到的是二进制数据，无法解析为 JSON）。
-          const stored = await persistence?.inspect?.(sessionId).catch(() => undefined);
-          if (stored && Array.isArray(stored.events)) {
-            const events = stored.events;
+          // 读取已解压的会话事件（DSH 默认启用 Zstd 压缩，直接 readFile 读到的是
+          // 二进制数据，无法解析为 JSON）。0.1.5 起 inspect 移除，改用
+          // open(id) → handle.read()（见 readSessionEvents）。
+          const events = await readSessionEvents(persistence, sessionId);
+          if (Array.isArray(events)) {
             // 统计 turn/start 事件数量作为真实对话轮数
             turnCount = events.filter((e) => e.type === 'turn/start').length;
             // 提取第一条真实用户消息作为衍生标题（过滤掉系统上下文等非用户输入）
@@ -635,7 +769,7 @@ function registerRoutes(ctx) {
 
   /** All sessions: persistence headers ∪ workspace membership, with archive flag. */
   async function allSessions() {
-    const headers = (await persistence?.list?.()) ?? [];
+    const headers = ((await persistence?.list?.()) ?? []).map(normalizeStoredHeader).filter(Boolean);
     const archived = registry?.requireState?.()?.archivedSessionIds ?? [];
     const byId = new Map(headers.map((h) => [h.id, h]));
     const wsBySession = new Map();
@@ -752,7 +886,7 @@ function registerRoutes(ctx) {
         const sessionId = url.searchParams.get('sessionId');
         if (!sessionId) throw httpError(400, 'BAD_REQUEST', 'sessionId is required');
 
-        const logPath = typeof persistence?.findLog === 'function' ? await persistence.findLog(sessionId) : undefined;
+        const logPath = await resolveSessionLogPath(persistence, sessionId);
         const messages = [];
 
         /** 提取用户消息中的真实对话内容，过滤掉系统上下文、skills 等注入内容 */
@@ -845,12 +979,13 @@ function registerRoutes(ctx) {
           return extractAnyText(obj.content ?? obj.text ?? obj.prompt ?? obj.message ?? obj.query ?? obj.payload ?? obj);
         }
 
-        // 优先使用 persistence.inspect() 读取已解压的会话事件
-        // （DSH 默认启用 Zstd 压缩，直接 readFile 读到的是二进制数据）。
+        // 优先读取已解压的会话事件（DSH 默认启用 Zstd 压缩，直接 readFile 读到的是
+        // 二进制数据）。0.1.5 起 inspect 移除，改用 open(id) → handle.read()
+        // （见 readSessionEvents）。
         try {
-          const stored = await persistence?.inspect?.(sessionId).catch(() => undefined);
-          if (stored && Array.isArray(stored.events)) {
-            for (const event of stored.events) {
+          const events = await readSessionEvents(persistence, sessionId);
+          if (Array.isArray(events)) {
+            for (const event of events) {
               if (event.type === 'user/message') {
                 // 只保留 source.kind === 'user' 的真实用户输入，
                 // 排除 plugin 注入的上下文（skills、系统上下文、工具结果等）
@@ -882,16 +1017,11 @@ function registerRoutes(ctx) {
           // inspect 失败后回退到直接读取日志文件（兼容未压缩的日志）
         }
 
-        // 回退方案：直接读取日志文件（仅当 inspect 未返回任何消息时）
+        // 回退方案：直接读取日志文件（仅当事件读取未返回任何消息时）
         if (messages.length === 0) {
-          // 广谱搜寻日志文件路径（兼容活跃日志、回收站归档日志及 profiles 目录）
+          // logPath 已由 resolveSessionLogPath 解析（findLog → locate → 目录扫描）；
+          // 此处只保留最后的广谱候选路径扫描（兼容活跃日志、回收站归档日志及 profiles 目录）。
           let resolvedLogPath = logPath;
-          if (!resolvedLogPath && typeof persistence?.locate === 'function') {
-            try {
-              const loc = persistence.locate({ id: sessionId });
-              resolvedLogPath = loc?.path || loc;
-            } catch {}
-          }
 
           if (!resolvedLogPath) {
             const home = process.env.HOME || process.env.USERPROFILE || '';

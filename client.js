@@ -462,6 +462,36 @@ window.__ModuleLoader__.load({
       });
     }
 
+    /**
+     * Resolve a session's display title from the browser store, falling back to
+     * the caller's value. MODULE-LEVEL on purpose: the header action and the
+     * sidebar row injector are module-level functions and cannot see a helper
+     * declared inside the TrashTab component (that produced a synchronous
+     * ReferenceError inside the click handler — the "button does nothing" bug).
+     */
+    function resolveSessionTitle(ctx, sessionId, fallback) {
+      try {
+        const byId = ctx?.sessions?.list?.getSnapshot?.()?.byId ?? {};
+        const title = byId[sessionId]?.title;
+        // 如果浏览器 store 中的标题就是 sessionId 本身，说明该会话已被归档、
+        // 浏览器 store 中只剩占位符，此时应优先使用服务端返回的 fallback 标题
+        // （服务端从 archivedTitles 或日志解析中获取了正确的名称）。
+        if (title && title !== sessionId) return title;
+        return fallback;
+      } catch {
+        return fallback;
+      }
+    }
+
+    /** 当前活动会话 ID：sessions.list 快照的 `current` 字段（0.1.1-rc.2 与 0.1.5-rc.1 均提供）。 */
+    function activeSessionId(ctx) {
+      try {
+        return ctx?.sessions?.list?.getSnapshot?.()?.current ?? undefined;
+      } catch {
+        return undefined;
+      }
+    }
+
     /** TrashTab Component */
     function TrashTab({ ctx }) {
       const [items, setItems] = useState([]);
@@ -500,19 +530,7 @@ window.__ModuleLoader__.load({
         return () => document.removeEventListener('pointerdown', handleClickOutside, true);
       }, []);
 
-      const currentTitle = (sessionId, fallback) => {
-        try {
-          const byId = ctx?.sessions?.list?.getSnapshot()?.byId ?? {};
-          const title = byId[sessionId]?.title;
-          // 如果浏览器 store 中的标题就是 sessionId 本身，说明该会话已被归档、
-          // 浏览器 store 中只剩占位符，此时应优先使用服务端返回的 fallback 标题
-          // （服务端从 archivedTitles 或日志解析中获取了正确的名称）。
-          if (title && title !== sessionId) return title;
-          return fallback;
-        } catch {
-          return fallback;
-        }
-      };
+      const currentTitle = (sessionId, fallback) => resolveSessionTitle(ctx, sessionId, fallback);
 
       const loadItems = useCallback(async () => {
         setError(null);
@@ -963,11 +981,14 @@ window.__ModuleLoader__.load({
     function DeleteSessionAction(props) {
       const ctx = props.ctx;
       const session = props.session || props.activeSession;
+      // 会话 ID 来源（按代际依次回退）：插槽 props（<=0.1.2 提供 sessionId/session）→
+      // sessions.list 快照的 current（0.1.5-rc.1 的插槽不再传 sessionId，但快照带 current）。
       const sessionId =
         props.sessionId ||
         props.id ||
         session?.id ||
         session?.sessionId ||
+        activeSessionId(ctx) ||
         ctx?.sessions?.active?.getSnapshot()?.session?.id ||
         ctx?.sessions?.currentId;
 
@@ -977,7 +998,7 @@ window.__ModuleLoader__.load({
           showToastLayer('无法识别当前活动会话 ID');
           return;
         }
-        const title = (session?.title || currentTitle(sessionId, '')) ?? '';
+        const title = (session?.title || resolveSessionTitle(ctx, sessionId, '')) ?? '';
         try {
           await api(ctx, `${API_PREFIX}/archive`, { method: 'POST', body: { sessionId, title } });
           purgeFromBrowserSessionStore(ctx, [sessionId]);
@@ -1207,7 +1228,7 @@ window.__ModuleLoader__.load({
         row.classList.add('dsh-trash-row');
 
         if (!title && sessionId) {
-          title = currentTitle(sessionId, '');
+          title = resolveSessionTitle(ctx, sessionId, '');
         }
 
         const button = document.createElement('button');

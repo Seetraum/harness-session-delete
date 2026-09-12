@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-recycle-bin",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "DSH 会话回收站：侧边栏删除图标、回收站多选还原/彻底删除、活跃会话保护。 · Session trash & permanent delete for DeepSeek Harness.",
   "type": "module",
   "main": "index.js",
@@ -48,7 +48,8 @@
   },
   "scripts": {
     "test": "node --test \"tests/*.test.js\"",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm test",
+    "verify:host": "node scripts/verify-real-host.mjs"
   },
   "engines": {
     "node": ">=20"

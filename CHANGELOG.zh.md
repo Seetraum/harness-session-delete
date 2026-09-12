@@ -7,6 +7,28 @@
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.4.0] - 2026-09-12
+
+### 修复
+
+- **DSH 0.1.5-rc.1 上，会话顶部的「移入回收站」按钮渲染出来了，但点击毫无反应。** 两个叠加原因都在浏览器半边。（1）`currentTitle()` 声明在 `TrashTab` 组件**内部**，却被模块级的 `DeleteSessionAction`（以及侧边栏行注入器）调用，因此每次点击都在发请求、弹提示之前就同步抛出 `ReferenceError`；而这条分支只有在插槽不再传 `session` 时才会走到——0.1.5 正是如此。（2）0.1.5 的插槽运行时不再把当前会话放进 action 的 props，而插件原先的回退（`ctx.sessions.active` / `ctx.sessions.currentId`）在**两代宿主上都不存在**——现在改为同时从 `sessions.list` 快照的 `current` 字段取（0.1.1-rc.2 与 0.1.5-rc.1 都提供）。标题解析已提升到模块级，侧边栏行注入器同一处潜在崩溃也随之消除。
+- **`findLog()` 在不同代际宿主返回两种形状，0.1.5 上永久删除与列表元数据因此失效。** 0.1.1/0.1.2 返回路径字符串；0.1.5 的 jsonl 后端返回“代描述符”对象（`{ sourcePath, sourceVersion, currentPath }`），对其调用 `dirname()` 直接抛错——清空失败、文件大小与轮数读成 0。适配层现同时归一化两种形状。单测 mock 此前只覆盖了字符串形状，该回归由新增的真机夹具捕获。
+
+### 新增
+
+- **双代际宿主支持（DSH 0.1.1-rc.2 / 0.1.2-rc.1 / 0.1.5-rc.1）。** 宿主半边现已适配 0.1.5-rc.1 的持久化重写，同时完整保留旧宿主的每一条路径；改动由 `dsh-upgrade-audit`（npm 模式，0.1.2-rc.1 → 0.1.5-rc.1）驱动：
+  - `persistence.list()` 头归一化——0.1.5 返回 `SessionPersistenceSnapshot[]`（`{ header, … }`）而非裸 `SessionHeader[]`；两种形状现均接受（`normalizeStoredHeader`）。
+  - 会话事件读取不再依赖 `persistence.inspect()`（0.1.5 已移除）——回退到 `persistence.open(id)` → `handle.read()`（`readSessionEvents`）。
+  - 物理日志路径解析不再只依赖 `findLog`/`locate`：`resolveSessionLogPath` 依次尝试 `findLog`（权威、原样返回）→ `locate`（stat 校验候选）→ 与宿主 API 无关的 `~/.dsh/sessions/<project>/<sessionId>/session*.jsonl*` 目录扫描，并识别 0.1.5 的按代命名 `session.v{1..3}.jsonl`。
+  - 六个 `dsh` peer 范围放宽为 `^0.1.1-rc.2 || ^0.1.2-rc.1 || ^0.1.5-rc.1`——npm 的预发布规则要求显式并集。`cordis` 保持 `^4.0.1`（本就接受 4.0.2）。
+  - 客户端 DOM 锚定与 `archivedSessionIds` 快照读取经核验在 0.1.2 与 0.1.5 之间不变（会话树在 `dsh-client-ui-workspace`，行标记完全相同）。
+- **真机沙箱夹具** —— `scripts/verify-real-host.mjs`（`npm run verify:host -- --packages <dir>`）把宿主半边挂载到**真实发布的 DSH 包树**上，按 bundle patch 的原始装配（storage → storage-json → storage-domain → session-persistence-jsonl → workspace），并通过插件自己的 HTTP 路由跑通完整回收站流程：写入真实会话 → `POST /archive` → `GET /list` → `GET /messages` → `POST /purge`，最后断言物理会话目录已被删除。仅 webServer 与投影缓存为桩。脚本具备代际感知（0.1.5 用 handle API，≤0.1.2 用 create+append），并以宿主自身的 `SESSION_FORMAT_VERSION` 写入头。结果：**0.1.2-rc.1 14/14**、**0.1.5-rc.1 14/14**，另有在真实 0.1.5-rc.1 宿主上的完整端到端流程（创建 → 归档 → 列表标题/轮数/文件大小正确 → 消息 → 清空并物理删除 `.jsonl.zstd`）。经 `.npmignore` 排除，不进入 npm 包。
+- **针对新失效模式的回归测试** —— 宿主测试 8 固定 0.1.5 持久化形状（快照 `list`、`open`/`read` handle、无 `inspect`、`locate` 候选），测试 9 固定 `findLog` 的“代描述符”形态；`tests/client-header-action.test.js` 以桩 DOM 加载 `client.js`，断言 0.1.5 的 props 形状（`{}`）与旧版形状（显式 `sessionId`）都能归档当前会话，并断言不存在模块级代码调用组件内 helper。
+
+### 备注
+
+- 兼容性已在 DSH **0.1.1-rc.2**、**0.1.2-rc.1**、**0.1.5-rc.1** 上验证。0.1.5 的发布前清单——真实 `webServer.register` 路由鉴权、`x-dsh-plugin` CSRF 接缝、真实 profile 上的归档/清空端到端——已全部完成。
+
 ## [0.3.3] - 2026-09-02
 
 ### 修复

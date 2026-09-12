@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.4.0] - 2026-09-12
+
+### Fixed
+
+- **On DSH 0.1.5-rc.1 the session-header "移入回收站" button rendered but clicking it did nothing.** Two stacked causes, both in the browser half. (1) `currentTitle()` was declared INSIDE the `TrashTab` component while the module-level `DeleteSessionAction` — and the sidebar row injector — called it, so every click threw a synchronous `ReferenceError` before any request or toast could happen; the branch is reachable only once the slot stops passing `session`, which is exactly what 0.1.5 does. (2) The 0.1.5 slot runtime no longer puts the active session on the action's props, and the plugin's fallbacks (`ctx.sessions.active` / `ctx.sessions.currentId`) never existed on either cohort — the id now also resolves from the `sessions.list` snapshot's `current` field, which 0.1.1-rc.2 and 0.1.5-rc.1 both provide. The title resolver is hoisted to module scope, which removes the same latent crash from the sidebar row injector.
+- **`findLog()` returns a different shape per host cohort, so permanent delete and list metadata broke on 0.1.5.** 0.1.1/0.1.2 return a path string; the 0.1.5 jsonl backend returns a generation descriptor (`{ sourcePath, sourceVersion, currentPath }`), and `dirname()` on that object threw — purge failed and fileSize/turnCount read as zero. The adapter now normalizes both shapes. The unit mocks had only ever exercised the string shape; the regression was caught by the new real-host harness.
+
+### Added
+
+- **Dual-cohort host support (DSH 0.1.1-rc.2 / 0.1.2-rc.1 / 0.1.5-rc.1).** The host half now adapts to the 0.1.5-rc.1 persistence rewrite while every older-host path stays intact; the changes were driven by `dsh-upgrade-audit` (npm mode, 0.1.2-rc.1 → 0.1.5-rc.1):
+  - `persistence.list()` header normalization — 0.1.5 returns `SessionPersistenceSnapshot[]` (`{ header, … }`) instead of raw `SessionHeader[]`; both shapes are now accepted (`normalizeStoredHeader`).
+  - Session-event reads no longer depend on `persistence.inspect()` (removed in 0.1.5) — they fall back to `persistence.open(id)` → `handle.read()` (`readSessionEvents`).
+  - Physical log-path resolution no longer relies on `findLog`/`locate` alone: `resolveSessionLogPath` tries `findLog` (authoritative, verbatim) → `locate` (stat-verified candidate) → a host-API-independent scan of `~/.dsh/sessions/<project>/<sessionId>/session*.jsonl*` that also recognizes the 0.1.5 versioned `session.v{1..3}.jsonl` names.
+  - The six `dsh` peer ranges are widened to `^0.1.1-rc.2 || ^0.1.2-rc.1 || ^0.1.5-rc.1` — npm's prerelease rule requires the explicit union. `cordis` stays `^4.0.1` (already accepts 4.0.2).
+  - Client-side DOM anchoring and `archivedSessionIds` snapshot reads were confirmed unchanged between 0.1.2 and 0.1.5 (the session tree lives in `dsh-client-ui-workspace`, whose row markup is identical).
+- **Real-host sandbox harness** — `scripts/verify-real-host.mjs` (`npm run verify:host -- --packages <dir>`) mounts the host half against a **real published DSH package tree**, composed exactly as the bundle patches declare (storage → storage-json → storage-domain → session-persistence-jsonl → workspace), and drives the full recycle-bin flow through the plugin's own HTTP routes: create a stored session → `POST /archive` → `GET /list` → `GET /messages` → `POST /purge`, then asserts the physical session directory is gone. Only webServer and the projection cache are stubbed. It is cohort-aware (handle API on 0.1.5, create+append on ≤0.1.2) and stamps the host's own `SESSION_FORMAT_VERSION`. Results: **0.1.2-rc.1 14/14**, **0.1.5-rc.1 14/14**, plus a full end-to-end lifecycle against a real 0.1.5-rc.1 host (create → archive → list with correct title/turnCount/fileSize → messages → purge with physical `.jsonl.zstd` deletion). Excluded from the npm package via `.npmignore`.
+- **Regression tests for the new failure modes** — host test 8 pins the 0.1.5 persistence shape (snapshot `list`, `open`/`read` handle, no `inspect`, `locate` candidate) and test 9 pins the generation-descriptor form of `findLog`; `tests/client-header-action.test.js` loads `client.js` against a stub DOM and asserts that both the 0.1.5 props shape (`{}`) and the legacy shape (explicit `sessionId`) archive the active session, and that no module-level code calls a component-scoped helper.
+
+### Notes
+
+- Compatibility is verified for DSH **0.1.1-rc.2**, **0.1.2-rc.1** and **0.1.5-rc.1**. The 0.1.5 pre-release checklist — live `webServer.register` route auth, the `x-dsh-plugin` CSRF seam, and end-to-end archive/purge on a real profile — is fully discharged.
+
 ## [0.3.3] - 2026-09-02
 
 ### Fixed
