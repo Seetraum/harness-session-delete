@@ -7,68 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
-## [0.4.4] - 2026-09-12
-
-### Fixed
-
-- **The real reason "设置 → 会话回收站" looked missing on DSH 0.1.5: the nav row was rendered *below the visible fold* and clipped — the registration had been healthy all along.** The settings panel pins its nav column to ~808 px (17 rows × 44 px): the panel itself is `overflow: hidden`, the nav column is `overflow: visible`, and there is no scrollbar. Whenever the window is not tall enough to fit the whole panel, the **tail of the column is cut off with no way to scroll to it**. Our section was registered with `order: 200` — the second-to-last row — so on any window shorter than roughly 800 px the entry vanished completely, while the session-header delete action (session-scoped) and the sidebar row buttons kept working. That asymmetry is why this looked like a registration bug for three releases.
-
-  Measured against the live host (`dsh web`, DSH 0.1.5-rc.2, 1440×800 viewport), the entry sits at `top: 748px / bottom: 788px` of an 800 px viewport — a 12 px margin. At 700 px it is already `bottom: 788 > 700`: invisible *and* unreachable. In the slot ledger the registration was present the whole time; opening the section by other means rendered the panel correctly.
-
-  `order` is now **25**, between `20` (dsh-mnemon "Memory System") and `30` (dsh-cost-meter "Cost"), i.e. in the top rows that no realistic window can clip. `order` is a plain number in both cohorts, so 0.1.1-rc.2 / 0.1.2-rc.1 are unaffected.
-
-- **`tests/client-header-action.test.js` now pins that placement**, so the entry cannot silently drift back into the clipped band: the harness records the registration options and the new test asserts an explicit numeric `order < 100` together with the `id`/`label` contract.
-
-### Notes
-
-- 0.4.1 (dropping contract-foreign `icon`/`iconName`/`Icon`/`renderIcon`), 0.4.2 (`dsh.client.inject` declaring `@deepseek-ai/dsh-client-ui-settings` / `@deepseek-ai/dsh-client-ui-conversation`) and 0.4.3 (dropping the unprovided `typert` from `exports.inject`) each removed a genuine deviation from the 0.1.5 contracts and are kept, but **none of them was the cause of the missing nav entry** — the entry was registered the whole time and only ever clipped. The reported symptom is fixed by this release's placement change.
-- The clipping itself is a **host defect** (`dsh-client-ui-settings-general`: `nav { overflow: visible }` inside `panel { overflow: hidden }`, a fixed 808 px row stack, no scrolling). It hides the last row or two for *every* section with a large order. Worth reporting upstream; this plugin deliberately does not patch the host's DOM.
-
-## [0.4.3] - 2026-09-12
-
-### Fixed
-
-- **On DSH 0.1.5 the settings page "会话回收站" still never appeared (real root cause unresolved by 0.4.2).** Root cause: `client.js` declared `exports.inject = ['slots', 'connection', 'typert', 'sessions', 'workspaces']`. In DSH 0.1.5's Web runtime, `typert` is no longer provided as a client-side Cordis Service (the package is not even included in the Web app bundle). Cordis requires all services declared in `inject` to be present; if any service is unprovided, the plugin's Fiber is permanently parked in the `INACTIVE` state (`epoch = INACTIVE`). Consequently, `apply(ctx)` was never executed — slot registrations (`settings.section` and the session header delete action), stylesheet injection, and sidebar delete button setup were all stalled. Removed the non-existent `typert` dependency from `exports.inject` and safely read `ctx?.get?.('typert')?.on?.(...)` for optional event handling.
-
-## [0.4.2] - 2026-09-12
-
-### Fixed
-
-- **On DSH 0.1.5 the settings page "会话回收站" never appeared, so the recycle-bin manager was unreachable.** Root cause: `dsh.client.inject` was empty. That field is the client module graph's dependency declaration, and every third-party plugin that contributes to the settings or slot system names the owning module there — `dsh-mnemon`, `dshmarket`, `dsh-context`, `dsh-vision-router` and `@anweat/dsh-browser` all list `@deepseek-ai/dsh-client-ui-settings`, while `dsh-better-sidebar` and `dsh-at-file` list `@deepseek-ai/dsh-client-ui-slots`. Ours declared `[]`, so the client fiber was constructed outside the settings module's context: session-scoped slots (the session-header delete action) kept working, while the root-scoped `settings.section` registration was silently never adopted — no console error, the nav entry simply did not exist. The declaration now lists `@deepseek-ai/dsh-client-ui-settings` and `@deepseek-ai/dsh-client-ui-conversation`; verified against the live `__DSH_BOOT__` graph, where our row was the only settings/slot contributor with an empty `inject`.
-
-### Notes
-
-- 0.4.1's removal of the contract-foreign `icon`/`iconName`/`Icon`/`renderIcon` fields from the `settings.section` registration is kept (the 0.1.5 nav row contract is `{ id, order, label }` only). It was not the root cause — mnemon passes extra fields and still works — but it aligns our registration with the documented example.
-
-## [0.4.1] - 2026-09-12
-
-### Fixed
-
-- **On DSH 0.1.5 the settings page "会话回收站" was missing entirely.** The `settings.section` registration also passed `icon` / `iconName` / `Icon` / `renderIcon`. 0.1.5's settings nav row contract is only `{ id, order, label }` — the slot catalog shipped inside `dsh-cordis-client-runner` lists exactly `id` (required), `order` and `label` (`string | (() => string)`) under `registerOptions`, and the icon fields belonged to the pre-0.1.5 nav that rendered a glyph per row. Passing them makes the whole registration silently dropped: no console error, the nav item simply never appears. The registration now carries contract fields only. `label` stays a thunk — both cohorts accept it ("a thunk is re-read on every projection"). This was the only registration with extra fields, which is exactly why the sidebar row icon and the session-header delete button kept working while this one vanished.
-
-### Notes
-
-- Cosmetic trade-off on DSH ≤ 0.1.2: that cohort reads the settings-nav glyph from this same registration, so it now renders the entry without the custom trash icon. Functionality is unaffected (0.1.5's nav has no icon seat at all).
 ## [0.4.0] - 2026-09-12
 
 ### Fixed
 
+- **The settings nav entry "会话回收站" never appeared on DSH 0.1.5 — the registration had been healthy all along; the row was rendered below the visible fold and clipped.** The settings panel pins its nav column to ~808 px (17 rows × 44 px): the panel itself is `overflow: hidden`, the nav column is `overflow: visible`, and there is no scrollbar. Whenever the window is not tall enough to fit the whole panel, the **tail of the column is cut off with no way to scroll to it**. Our section was registered with `order: 200` — the second-to-last row — so on any window shorter than roughly 800 px the entry vanished completely, while the session-header delete action (session-scoped) and the sidebar row buttons kept working. That asymmetry is why this looked like a registration bug.
+
+  Measured against the live host (`dsh web`, DSH 0.1.5-rc.2, 1440×800 viewport), the entry sat at `top: 748px / bottom: 788px` of an 800 px viewport — a 12 px margin. At 700 px it is already `bottom: 788 > 700`: invisible *and* unreachable. In the slot ledger the registration was present the whole time; opening the section by other means rendered the panel correctly.
+
+  `order` is now **25**, between `20` (dsh-mnemon "Memory System") and `30` (dsh-cost-meter "Cost"), i.e. in the top rows that no realistic window can clip. `order` is a plain number in both cohorts, so 0.1.1-rc.2 / 0.1.2-rc.1 are unaffected. `tests/client-header-action.test.js` now pins that placement — the harness records the registration options and the test asserts an explicit numeric `order < 100` together with the `id`/`label` contract — so the entry cannot silently drift back into the clipped band.
+
+- **The `settings.section` registration passed contract-foreign fields.** It carried `icon` / `iconName` / `Icon` / `renderIcon`, while 0.1.5's settings nav row contract is only `{ id, order, label }` — the slot catalog shipped inside `dsh-cordis-client-runner` lists exactly `id` (required), `order` and `label` (`string | (() => string)`) under `registerOptions`, and the icon fields belonged to the pre-0.1.5 nav that rendered a glyph per row. The registration now carries contract fields only. `label` stays a thunk — both cohorts accept it ("a thunk is re-read on every projection").
+
+- **`dsh.client.inject` was empty, so the client fiber was constructed outside the settings module's context.** That field is the client module graph's dependency declaration, and every third-party plugin that contributes to the settings or slot system names the owning module there — `dsh-mnemon`, `dshmarket`, `dsh-context`, `dsh-vision-router` and `@anweat/dsh-browser` all list `@deepseek-ai/dsh-client-ui-settings`, while `dsh-better-sidebar` and `dsh-at-file` list `@deepseek-ai/dsh-client-ui-slots`. Ours declared `[]`, so session-scoped slots (the session-header delete action) kept working, while the root-scoped `settings.section` registration was silently never adopted — no console error, the nav entry simply did not exist. The declaration now lists `@deepseek-ai/dsh-client-ui-settings` and `@deepseek-ai/dsh-client-ui-conversation`, verified against the live `__DSH_BOOT__` graph, where our row was the only settings/slot contributor with an empty `inject`.
+
+- **`exports.inject` declared `typert`, which DSH 0.1.5 no longer provides on the Web client** (the package is not even included in the Web app bundle). Cordis requires all services declared in `inject` to be present; if any service is unprovided, the plugin's Fiber is permanently parked in the `INACTIVE` state (`epoch = INACTIVE`). Consequently, `apply(ctx)` was never executed — slot registrations (`settings.section` and the session header delete action), stylesheet injection, and sidebar delete button setup were all stalled. `typert` is removed from `exports.inject` and the optional listener now degrades safely through `ctx?.get?.('typert')?.on?.(...)`.
+
 - **On DSH 0.1.5-rc.1 the session-header "移入回收站" button rendered but clicking it did nothing.** Two stacked causes, both in the browser half. (1) `currentTitle()` was declared INSIDE the `TrashTab` component while the module-level `DeleteSessionAction` — and the sidebar row injector — called it, so every click threw a synchronous `ReferenceError` before any request or toast could happen; the branch is reachable only once the slot stops passing `session`, which is exactly what 0.1.5 does. (2) The 0.1.5 slot runtime no longer puts the active session on the action's props, and the plugin's fallbacks (`ctx.sessions.active` / `ctx.sessions.currentId`) never existed on either cohort — the id now also resolves from the `sessions.list` snapshot's `current` field, which 0.1.1-rc.2 and 0.1.5-rc.1 both provide. The title resolver is hoisted to module scope, which removes the same latent crash from the sidebar row injector.
+
 - **`findLog()` returns a different shape per host cohort, so permanent delete and list metadata broke on 0.1.5.** 0.1.1/0.1.2 return a path string; the 0.1.5 jsonl backend returns a generation descriptor (`{ sourcePath, sourceVersion, currentPath }`), and `dirname()` on that object threw — purge failed and fileSize/turnCount read as zero. The adapter now normalizes both shapes. The unit mocks had only ever exercised the string shape; the regression was caught by the new real-host harness.
 
 ### Added
 
-- **Dual-cohort host support (DSH 0.1.1-rc.2 / 0.1.2-rc.1 / 0.1.5-rc.1).** The host half now adapts to the 0.1.5-rc.1 persistence rewrite while every older-host path stays intact; the changes were driven by `dsh-upgrade-audit` (npm mode, 0.1.2-rc.1 → 0.1.5-rc.1):
+- **Dual-cohort host support (DSH 0.1.1-rc.2 / 0.1.2-rc.1 / 0.1.5-rc.1).** The host half now adapts to the 0.1.5-rc.1 persistence rewrite while keeping every older-host path intact; the changes were driven by `dsh-upgrade-audit` (npm mode, 0.1.2-rc.1 → 0.1.5-rc.1):
   - `persistence.list()` header normalization — 0.1.5 returns `SessionPersistenceSnapshot[]` (`{ header, … }`) instead of raw `SessionHeader[]`; both shapes are now accepted (`normalizeStoredHeader`).
   - Session-event reads no longer depend on `persistence.inspect()` (removed in 0.1.5) — they fall back to `persistence.open(id)` → `handle.read()` (`readSessionEvents`).
   - Physical log-path resolution no longer relies on `findLog`/`locate` alone: `resolveSessionLogPath` tries `findLog` (authoritative, verbatim) → `locate` (stat-verified candidate) → a host-API-independent scan of `~/.dsh/sessions/<project>/<sessionId>/session*.jsonl*` that also recognizes the 0.1.5 versioned `session.v{1..3}.jsonl` names.
   - The six `dsh` peer ranges are widened to `^0.1.1-rc.2 || ^0.1.2-rc.1 || ^0.1.5-rc.1` — npm's prerelease rule requires the explicit union. `cordis` stays `^4.0.1` (already accepts 4.0.2).
   - Client-side DOM anchoring and `archivedSessionIds` snapshot reads were confirmed unchanged between 0.1.2 and 0.1.5 (the session tree lives in `dsh-client-ui-workspace`, whose row markup is identical).
 - **Real-host sandbox harness** — `scripts/verify-real-host.mjs` (`npm run verify:host -- --packages <dir>`) mounts the host half against a **real published DSH package tree**, composed exactly as the bundle patches declare (storage → storage-json → storage-domain → session-persistence-jsonl → workspace), and drives the full recycle-bin flow through the plugin's own HTTP routes: create a stored session → `POST /archive` → `GET /list` → `GET /messages` → `POST /purge`, then asserts the physical session directory is gone. Only webServer and the projection cache are stubbed. It is cohort-aware (handle API on 0.1.5, create+append on ≤0.1.2) and stamps the host's own `SESSION_FORMAT_VERSION`. Results: **0.1.2-rc.1 14/14**, **0.1.5-rc.1 14/14**, plus a full end-to-end lifecycle against a real 0.1.5-rc.1 host (create → archive → list with correct title/turnCount/fileSize → messages → purge with physical `.jsonl.zstd` deletion). Excluded from the npm package via `.npmignore`.
-- **Regression tests for the new failure modes** — host test 8 pins the 0.1.5 persistence shape (snapshot `list`, `open`/`read` handle, no `inspect`, `locate` candidate) and test 9 pins the generation-descriptor form of `findLog`; `tests/client-header-action.test.js` loads `client.js` against a stub DOM and asserts that both the 0.1.5 props shape (`{}`) and the legacy shape (explicit `sessionId`) archive the active session, and that no module-level code calls a component-scoped helper.
+- **Regression tests for the new failure modes** — host test 8 pins the 0.1.5 persistence shape (snapshot `list`, `open`/`read` handle, no `inspect`, `locate` candidate) and test 9 pins the generation-descriptor form of `findLog`; `tests/client-header-action.test.js` loads `client.js` against a stub DOM and asserts that both the 0.1.5 props shape (`{}`) and the legacy shape (explicit `sessionId`) archive the active session, that no module-level code calls a component-scoped helper, and that the `settings.section` registration keeps an explicit numeric `order < 100`.
 
 ### Notes
 
+- The three contract deviations fixed in this release (`icon`/`iconName`/`Icon`/`renderIcon`, the empty `dsh.client.inject`, the unprovided `typert`) were each a genuine deviation from the 0.1.5 contracts and are kept, but **none of them was the cause of the missing nav entry**: the entry was registered the whole time and only ever clipped. The reported symptom is fixed by this release's placement change.
+- **The clipping itself is a host defect** (`dsh-client-ui-settings-general`: `nav { overflow: visible }` inside `panel { overflow: hidden }`, a fixed 808 px row stack, no scrolling). It hides the last row or two for *every* section with a large order. Worth reporting upstream; this plugin deliberately does not patch the host's DOM.
+- Cosmetic trade-off on DSH ≤ 0.1.2: that cohort reads the settings-nav glyph from this same registration, so it now renders the entry without the custom trash icon. Functionality is unaffected (0.1.5's nav has no icon seat at all).
 - Compatibility is verified for DSH **0.1.1-rc.2**, **0.1.2-rc.1** and **0.1.5-rc.1**. The 0.1.5 pre-release checklist — live `webServer.register` route auth, the `x-dsh-plugin` CSRF seam, and end-to-end archive/purge on a real profile — is fully discharged.
 
 ## [0.3.3] - 2026-09-02
