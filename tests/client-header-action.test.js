@@ -45,7 +45,7 @@ function makeEl(tag = 'div') {
 }
 
 /** Load the browser bundle and return its exports plus the captured registrations. */
-function loadClient() {
+function loadClient(language = 'en-US') {
   const documentStub = {
     body: makeEl('body'), head: makeEl('head'), documentElement: makeEl('html'),
     createElement: (t) => makeEl(t), getElementById: () => null,
@@ -58,7 +58,10 @@ function loadClient() {
   globalThis.cancelAnimationFrame = () => {};
 
   let definition = null;
-  globalThis.window = { __ModuleLoader__: { load(def) { definition = def; } } };
+  globalThis.window = {
+    navigator: { language, languages: [language] },
+    __ModuleLoader__: { load(def) { definition = def; } },
+  };
   const code = readFileSync(CLIENT, 'utf8');
   new Function('window', 'document', code)(globalThis.window, documentStub);
 
@@ -93,7 +96,12 @@ function loadClient() {
 async function clickHeaderAction(props) {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
-    calls.push({ url, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined });
+    calls.push({
+      url,
+      method: options.method || 'GET',
+      headers: options.headers,
+      body: options.body ? JSON.parse(options.body) : undefined,
+    });
     return { ok: true, status: 200, async json() { return { ok: true, data: {} }; } };
   };
   const { registrations, ctx } = loadClient();
@@ -111,6 +119,7 @@ describe('client header action (dual cohort)', () => {
     const call = await clickHeaderAction({});
     assert.ok(call, 'POST /archive must be issued — a ReferenceError here was the "click does nothing" bug');
     assert.equal(call.method, 'POST');
+    assert.equal(call.headers['x-dsh-locale'], 'en');
     assert.equal(call.body.sessionId, CURRENT, 'active id resolves from the sessions.list snapshot current');
   });
 
@@ -150,7 +159,13 @@ describe('client header action (dual cohort)', () => {
       + ' the host clips the tail of a fixed-height, non-scrollable nav column'
     );
     assert.equal(typeof opts.label, 'function', 'label thunk is accepted by both cohorts');
-    assert.equal(opts.label(), '会话回收站');
+    assert.equal(opts.label(), 'Session Recycle Bin');
+  });
+
+  test('Chinese browser locales preserve the original labels', () => {
+    const { registrationOptions } = loadClient('zh-CN');
+    assert.equal(registrationOptions['settings.section'].label(), '会话回收站');
+    assert.equal(registrationOptions['conversation.session.header.actions'].label(), '删除会话');
   });
 
   test('client exports.inject must not declare unprovided services like typert (0.1.5 regression)', async () => {
@@ -161,7 +176,7 @@ describe('client header action (dual cohort)', () => {
       createElement: () => ({ setAttribute() {}, appendChild() {} }),
       querySelectorAll: () => [],
     };
-    const win = { __ModuleLoader__: { load(def) { definition = def; } } };
+    const win = { navigator: { language: 'en-US' }, __ModuleLoader__: { load(def) { definition = def; } } };
     const code = readFileSync(CLIENT, 'utf8');
     new Function('window', 'document', code)(win, documentStub);
     const mod = definition.factory(() => ({}));
@@ -171,4 +186,3 @@ describe('client header action (dual cohort)', () => {
     assert.ok(mod.inject.includes('slots'), 'slots service must be declared');
   });
 });
-

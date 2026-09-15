@@ -15,6 +15,153 @@ window.__ModuleLoader__.load({
 
     const API_PREFIX = '/api/session-trash';
 
+    const MESSAGES = {
+      en: {
+        undo: 'Undo',
+        loadFailed: 'Failed to load the recycle bin',
+        restored: 'Restored session “{title}”',
+        undoFailed: 'Undo failed',
+        restoreFailed: 'Restore failed: {message}',
+        confirmPermanentTitle: 'Confirm permanent deletion',
+        confirmPermanentBody: 'Permanently delete the session “{title}”? This cannot be undone and its conversation history will be erased.',
+        deleteFailed: 'Deletion failed: {message}',
+        unknownError: 'Unknown error',
+        deleted: 'Session permanently deleted',
+        deleteArchivedTitle: 'Permanently delete archived sessions',
+        deleteWorkspaceBody: 'Permanently delete {count} session(s) from the workspace “{title}”? This cannot be undone.',
+        deletedSelected: 'Selected archived sessions permanently deleted',
+        deleteAllTitle: 'Delete all archived sessions',
+        deleteAllBody: 'Permanently delete all {count} archived session(s)? This cannot be undone.',
+        emptied: 'Permanently deleted all {count} session(s) from the recycle bin',
+        emptyFailed: 'Failed to empty the recycle bin: {message}',
+        historyFailed: 'Failed to load session history: {message}',
+        other: 'Other',
+        otherProjects: 'Other projects',
+        otherWorkspaces: 'Other workspaces',
+        unnamedProject: 'Unnamed project',
+        unnamedSession: 'Unnamed session',
+        recycleBin: 'Session Recycle Bin',
+        archivedCount: '{count} archived session(s)',
+        searchPlaceholder: 'Search archived sessions...',
+        allProjects: 'All projects',
+        newestFirst: 'Recently deleted (newest first)',
+        oldestFirst: 'Oldest deleted (oldest first)',
+        deleteAll: 'Delete all',
+        loading: 'Loading archived sessions...',
+        empty: 'The recycle bin is empty',
+        noMatches: 'No matching archived sessions found',
+        sessionCount: '{count} session(s)',
+        projectActions: 'Project actions',
+        selectedSuffix: '{title} ({count} selected)',
+        deleteSelected: 'Permanently delete selected ({count})',
+        deleteProject: 'Permanently delete all in project',
+        turnCount: '{count} turn(s)',
+        view: 'View',
+        restore: 'Restore',
+        permanentlyDelete: 'Permanently delete',
+        previewTitle: 'Session: {title}',
+        loadingHistory: 'Loading conversation history...',
+        noHistory: 'No conversation history',
+        user: '👤 User',
+        assistant: '🤖 Assistant',
+        cancel: 'Cancel',
+        confirmDelete: 'Confirm deletion',
+        path: 'Path: {path}',
+        noActiveSession: 'Could not identify the active session ID',
+        movedToBin: 'Moved session “{title}” to the recycle bin',
+        currentSession: 'Current session',
+        session: 'Session',
+        moveFailed: 'Failed to move session to the recycle bin: {message}',
+        moveToBin: 'Move to Recycle Bin',
+        deleteSession: 'Delete Session',
+        sessionRunning: 'The session is currently running and cannot be deleted.',
+      },
+      zh: {
+        undo: '撤销',
+        loadFailed: '加载回收站列表失败',
+        restored: '已恢复会话「{title}」',
+        undoFailed: '撤销失败',
+        restoreFailed: '恢复失败: {message}',
+        confirmPermanentTitle: '确认彻底删除',
+        confirmPermanentBody: '确定要永久删除会话「{title}」吗？此操作不可撤销，历史对话记录将被完全清除。',
+        deleteFailed: '删除失败: {message}',
+        unknownError: '未知错误',
+        deleted: '已彻底删除会话',
+        deleteArchivedTitle: '彻底删除归档会话',
+        deleteWorkspaceBody: '确定要永久删除工作区「{title}」下的 {count} 个会话吗？此操作不可撤销。',
+        deletedSelected: '已彻底删除所选归档会话',
+        deleteAllTitle: '全部删除归档会话',
+        deleteAllBody: '确定要永久删除全部 {count} 个归档会话吗？此操作不可撤销。',
+        emptied: '已清空回收站中全部 {count} 个会话',
+        emptyFailed: '清空失败: {message}',
+        historyFailed: '获取会话记录失败: {message}',
+        other: '其他',
+        otherProjects: '其他项目',
+        otherWorkspaces: '其他工作区',
+        unnamedProject: '未命名项目',
+        unnamedSession: '未命名会话',
+        recycleBin: '会话回收站',
+        archivedCount: '共 {count} 个已归档会话',
+        searchPlaceholder: '搜索已归档聊天...',
+        allProjects: '所有项目',
+        newestFirst: '最近删除 (降序)',
+        oldestFirst: '最早删除 (正序)',
+        deleteAll: '全部删除',
+        loading: '加载已归档会话...',
+        empty: '回收站暂无会话',
+        noMatches: '未找到匹配的归档会话',
+        sessionCount: '{count} 个聊天',
+        projectActions: '项目操作',
+        selectedSuffix: '{title} (选中的 {count} 项)',
+        deleteSelected: '彻底删除选中 ({count})',
+        deleteProject: '彻底删除项目全部',
+        turnCount: '{count} 轮对话',
+        view: '查看',
+        restore: '还原',
+        permanentlyDelete: '彻底删除',
+        previewTitle: '查看会话：{title}',
+        loadingHistory: '正在读取历史对话记录...',
+        noHistory: '暂无对话记录',
+        user: '👤 用户',
+        assistant: '🤖 助手',
+        cancel: '取消',
+        confirmDelete: '确定删除',
+        path: '路径: {path}',
+        noActiveSession: '无法识别当前活动会话 ID',
+        movedToBin: '已将会话「{title}」移入回收站',
+        currentSession: '当前会话',
+        session: '会话',
+        moveFailed: '移入回收站失败: {message}',
+        moveToBin: '移入回收站',
+        deleteSession: '删除会话',
+        sessionRunning: '会话正在运行中，无法删除',
+      },
+    };
+
+    function resolveLocale() {
+      const language = window?.navigator?.language || window?.navigator?.languages?.[0] || '';
+      return /^zh(?:-|$)/i.test(language) ? 'zh' : 'en';
+    }
+
+    const UI_LOCALE = resolveLocale();
+
+    function t(key, params = {}) {
+      const template = MESSAGES[UI_LOCALE]?.[key] ?? MESSAGES.en[key] ?? key;
+      return String(template).replace(/\{(\w+)\}/g, (_match, name) => String(params[name] ?? ''));
+    }
+
+    function localizedError(error) {
+      if (error?.code === 'SESSION_RUNNING') return t('sessionRunning');
+      return error?.message || t('unknownError');
+    }
+
+    function localizeServerFallback(value) {
+      if (value === '未命名会话' || value === 'Unnamed session') return t('unnamedSession');
+      if (value === '其他项目' || value === 'Other projects') return t('otherProjects');
+      if (value === '其他工作区' || value === 'Other workspaces') return t('otherWorkspaces');
+      return value;
+    }
+
     /** Safe icon helper functions (zero-fail direct element creation) */
     function renderTrashIcon(props = {}) {
       const { style, ...rest } = props;
@@ -153,7 +300,7 @@ window.__ModuleLoader__.load({
     }
 
     /** Show a bottom-left floating toast prompt. */
-    function showToastLayer(message, undoFn, actionText = '撤销') {
+    function showToastLayer(message, undoFn, actionText = t('undo')) {
       if (typeof document === 'undefined') return;
 
       let container = document.getElementById('dsh-session-recycle-bin-toast-container');
@@ -226,6 +373,7 @@ window.__ModuleLoader__.load({
         headers: {
           'Content-Type': 'application/json',
           'x-dsh-plugin': 'session-trash',
+          'x-dsh-locale': UI_LOCALE,
           ...(options.headers || {}),
         },
         body: options.body ? JSON.stringify(options.body) : undefined,
@@ -234,7 +382,9 @@ window.__ModuleLoader__.load({
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload.ok === false) {
         const message = payload?.error?.message || `HTTP ${response.status}`;
-        throw new Error(message);
+        const error = new Error(message);
+        error.code = payload?.error?.code;
+        throw error;
       }
       return payload.data;
     }
@@ -538,7 +688,7 @@ window.__ModuleLoader__.load({
           const value = await api(ctx, `${API_PREFIX}/list`);
           setItems(value?.items ?? []);
         } catch (err) {
-          setError(err.message || '加载回收站列表失败');
+          setError(err.message || t('loadFailed'));
         } finally {
           setLoading(false);
         }
@@ -569,40 +719,40 @@ window.__ModuleLoader__.load({
           // （fetch/load/reload 并不存在，正确方法是 refresh()）
           refreshSessionViews(ctx);
 
-          showToastLayer(`已恢复会话「${currentTitle(session.sessionId, session.title) || session.title || session.sessionId}」`, async () => {
+          showToastLayer(t('restored', { title: currentTitle(session.sessionId, session.title) || session.title || session.sessionId }), async () => {
             try {
               await api(ctx, `${API_PREFIX}/archive`, { method: 'POST', body: { sessionId: session.sessionId } });
               loadItems();
               try { refreshSessionViews(ctx); } catch {}
             } catch (e) {
-              console.error('撤销失败', e);
+              console.error(t('undoFailed'), e);
             }
           });
         } catch (err) {
-          showToastLayer(`恢复失败: ${err.message}`);
+          showToastLayer(t('restoreFailed', { message: localizedError(err) }));
         }
       };
 
       /** 物理彻底删除单个会话 */
       const handlePurgeSingle = async (sessionId, sessionTitle) => {
         setConfirmModal({
-          title: '确认彻底删除',
-          body: `确定要永久删除会话「${sessionTitle}」吗？此操作不可撤销，历史对话记录将被完全清除。`,
+          title: t('confirmPermanentTitle'),
+          body: t('confirmPermanentBody', { title: sessionTitle }),
           onConfirm: async () => {
             try {
               const result = await api(ctx, `${API_PREFIX}/purge`, { method: 'POST', body: { sessionIds: [sessionId] } });
               const failedIds = new Set((result?.errors ?? []).map((e) => e.sessionId));
               if (failedIds.has(sessionId)) {
                 const errItem = result.errors.find((e) => e.sessionId === sessionId);
-                showToastLayer(`删除失败: ${errItem?.message || '未知错误'}`);
+                showToastLayer(t('deleteFailed', { message: localizedError(errItem) }));
               } else {
                 purgeFromBrowserSessionStore(ctx, [sessionId]);
-                showToastLayer(`已彻底删除会话`);
+                showToastLayer(t('deleted'));
               }
               setConfirmModal(null);
               loadItems();
             } catch (err) {
-              showToastLayer(`删除失败: ${err.message}`);
+              showToastLayer(t('deleteFailed', { message: localizedError(err) }));
             }
           },
         });
@@ -611,8 +761,8 @@ window.__ModuleLoader__.load({
       /** 物理彻底删除指定工作区下的所有/选中的归档会话 */
       const handlePurgeWorkspace = async (workspacePath, workspaceTitle, groupItems) => {
         setConfirmModal({
-          title: '彻底删除归档会话',
-          body: `确定要永久删除工作区「${workspaceTitle}」下的 ${groupItems.length} 个会话吗？此操作不可撤销。`,
+          title: t('deleteArchivedTitle'),
+          body: t('deleteWorkspaceBody', { title: workspaceTitle, count: groupItems.length }),
           onConfirm: async () => {
             try {
               const ids = groupItems.map((i) => i.sessionId);
@@ -623,9 +773,9 @@ window.__ModuleLoader__.load({
               setConfirmModal(null);
               setActiveWorkspaceMenu(null);
               loadItems();
-              showToastLayer(`已彻底删除所选归档会话`);
+              showToastLayer(t('deletedSelected'));
             } catch (err) {
-              showToastLayer(`删除失败: ${err.message}`);
+              showToastLayer(t('deleteFailed', { message: localizedError(err) }));
             }
           },
         });
@@ -634,8 +784,8 @@ window.__ModuleLoader__.load({
       /** 彻底删除全部归档会话 */
       const handleEmptyAll = () => {
         setConfirmModal({
-          title: '全部删除归档会话',
-          body: `确定要永久删除全部 ${items.length} 个归档会话吗？此操作不可撤销。`,
+          title: t('deleteAllTitle'),
+          body: t('deleteAllBody', { count: items.length }),
           onConfirm: async () => {
             try {
               const ids = items.map((i) => i.sessionId);
@@ -643,9 +793,9 @@ window.__ModuleLoader__.load({
               purgeFromBrowserSessionStore(ctx, ids);
               setConfirmModal(null);
               loadItems();
-              showToastLayer(`已清空回收站中全部 ${items.length} 个会话`);
+              showToastLayer(t('emptied', { count: items.length }));
             } catch (err) {
-              showToastLayer(`清空失败: ${err.message}`);
+              showToastLayer(t('emptyFailed', { message: localizedError(err) }));
             }
           },
         });
@@ -661,7 +811,7 @@ window.__ModuleLoader__.load({
           const res = await api(ctx, `${API_PREFIX}/messages?sessionId=${encodeURIComponent(session.sessionId)}`);
           setPreviewMessages(res?.messages ?? []);
         } catch (err) {
-          showToastLayer(`获取会话记录失败: ${err.message}`);
+          showToastLayer(t('historyFailed', { message: localizedError(err) }));
         } finally {
           setPreviewLoading(false);
         }
@@ -671,8 +821,8 @@ window.__ModuleLoader__.load({
       const workspaceOptions = React.useMemo(() => {
         const map = new Map();
         for (const item of items) {
-          const key = item.workspacePath || item.cwd || '其他';
-          const title = item.workspaceTitle || (item.cwd ? item.cwd.split('/').pop() : '其他项目');
+          const key = item.workspacePath || item.cwd || t('other');
+          const title = localizeServerFallback(item.workspaceTitle) || (item.cwd ? item.cwd.split('/').pop() : t('otherProjects'));
           if (!map.has(key)) map.set(key, { path: key, title });
         }
         return [...map.values()];
@@ -698,8 +848,8 @@ window.__ModuleLoader__.load({
         const groups = new Map();
         const groupOrder = [];
         for (const item of list) {
-          const key = item.workspacePath || item.cwd || '其他工作区';
-          const title = item.workspaceTitle || (item.cwd ? item.cwd.split('/').pop() : '未命名项目');
+          const key = item.workspacePath || item.cwd || t('otherWorkspaces');
+          const title = localizeServerFallback(item.workspaceTitle) || (item.cwd ? item.cwd.split('/').pop() : t('unnamedProject'));
           if (!groups.has(key)) {
             groups.set(key, { path: key, title, items: [] });
             groupOrder.push(key);
@@ -725,9 +875,9 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dsh-trash-header-left' },
             h('h2', { className: 'dsh-trash-title' },
               renderTrashIcon({ className: 'dsh-trash-icon-title' }),
-              '会话回收站'
+              t('recycleBin')
             ),
-            h('p', { className: 'dsh-trash-subtitle' }, `共 ${items.length} 个已归档会话`)
+            h('p', { className: 'dsh-trash-subtitle' }, t('archivedCount', { count: items.length }))
           )
         ),
 
@@ -740,7 +890,7 @@ window.__ModuleLoader__.load({
           h('input', {
             type: 'text',
             className: 'dsh-trash-search-input',
-            placeholder: '搜索已归档聊天...',
+            placeholder: t('searchPlaceholder'),
             value: searchQuery,
             onChange: (e) => setSearchQuery(e.target.value),
           })
@@ -753,7 +903,7 @@ window.__ModuleLoader__.load({
             value: filterWorkspace,
             onChange: (e) => setFilterWorkspace(e.target.value),
           },
-            h('option', { value: '' }, '所有项目'),
+            h('option', { value: '' }, t('allProjects')),
             workspaceOptions.map((w) => h('option', { key: w.path, value: w.path }, w.title))
           ),
 
@@ -762,8 +912,8 @@ window.__ModuleLoader__.load({
             value: sortOrder,
             onChange: (e) => setSortOrder(e.target.value),
           },
-            h('option', { value: 'desc' }, '最近删除 (降序)'),
-            h('option', { value: 'asc' }, '最早删除 (正序)')
+            h('option', { value: 'desc' }, t('newestFirst')),
+            h('option', { value: 'asc' }, t('oldestFirst'))
           ),
 
           items.length > 0 &&
@@ -772,19 +922,19 @@ window.__ModuleLoader__.load({
               onClick: handleEmptyAll,
             },
               renderTrashIcon({ className: 'dsh-trash-icon-btn' }),
-              '全部删除'
+              t('deleteAll')
             )
         ),
 
         // List Content
         loading
-          ? h('div', { className: 'dsh-trash-state' }, '加载已归档会话...')
+          ? h('div', { className: 'dsh-trash-state' }, t('loading'))
           : error
           ? h('div', { className: 'dsh-trash-state dsh-trash-state--error' }, error)
           : items.length === 0
-          ? h('div', { className: 'dsh-trash-state' }, '回收站暂无会话')
+          ? h('div', { className: 'dsh-trash-state' }, t('empty'))
           : groupedWorkspaces.length === 0
-          ? h('div', { className: 'dsh-trash-state' }, '未找到匹配的归档会话')
+          ? h('div', { className: 'dsh-trash-state' }, t('noMatches'))
           : h('div', { className: 'dsh-trash-groups' },
               groupedWorkspaces.map((group) => {
                 const groupSelectedIds = group.items.map((i) => i.sessionId).filter((id) => selectedSessionIds.has(id));
@@ -799,12 +949,12 @@ window.__ModuleLoader__.load({
                       h('span', { className: 'dsh-trash-group-path', title: group.path }, group.path)
                     ),
                     h('div', { className: 'dsh-trash-group-right' },
-                      h('span', { className: 'dsh-trash-group-count' }, `${group.items.length} 个聊天`),
+                      h('span', { className: 'dsh-trash-group-count' }, t('sessionCount', { count: group.items.length })),
                       h('div', { className: 'dsh-more-menu-container dsh-trash-more-wrap' },
                         h('button', {
                           type: 'button',
                           className: 'dsh-trash-more-btn',
-                          title: '项目操作',
+                          title: t('projectActions'),
                           onClick: (e) => {
                             e.stopPropagation();
                             setActiveWorkspaceMenu(activeWorkspaceMenu === group.path ? null : group.path);
@@ -819,11 +969,11 @@ window.__ModuleLoader__.load({
                                 const targets = hasSelected
                                   ? group.items.filter((i) => selectedSessionIds.has(i.sessionId))
                                   : group.items;
-                                handlePurgeWorkspace(group.path, hasSelected ? `${group.title} (选中的 ${groupSelectedIds.length} 项)` : group.title, targets);
+                                handlePurgeWorkspace(group.path, hasSelected ? t('selectedSuffix', { title: group.title, count: groupSelectedIds.length }) : group.title, targets);
                               },
                             },
                               renderTrashIcon({ className: 'dsh-trash-icon-menu' }),
-                              hasSelected ? `彻底删除选中 (${groupSelectedIds.length})` : '彻底删除项目全部'
+                              hasSelected ? t('deleteSelected', { count: groupSelectedIds.length }) : t('deleteProject')
                             )
                           )
                       )
@@ -833,7 +983,7 @@ window.__ModuleLoader__.load({
                   // Session Cards List
                   h('div', { className: 'dsh-trash-cards' },
                     group.items.map((item) => {
-                      const displayTitle = currentTitle(item.sessionId, item.title) || item.sessionId;
+                      const displayTitle = currentTitle(item.sessionId, localizeServerFallback(item.title)) || item.sessionId;
                       const path = item.cwd || item.workspacePath || '-';
                       const isChecked = selectedSessionIds.has(item.sessionId);
 
@@ -875,7 +1025,7 @@ window.__ModuleLoader__.load({
                           // Metadata Row (时间, 轮数, 容量 Badge)
                           h('div', { className: 'dsh-trash-card-meta' },
                             h('span', { className: 'dsh-trash-card-meta-item' }, formatTime(item.archivedAt)),
-                            h('span', { className: 'dsh-trash-card-meta-item' }, `${item.turnCount ?? 0} 轮对话`),
+                            h('span', { className: 'dsh-trash-card-meta-item' }, t('turnCount', { count: item.turnCount ?? 0 })),
                             h('span', { className: 'dsh-trash-badge' },
                               renderDiskIcon({ className: 'dsh-trash-icon-badge' }),
                               formatFileSize(item.fileSize)
@@ -891,7 +1041,7 @@ window.__ModuleLoader__.load({
                             onClick: () => handleOpenPreview(item),
                           },
                             renderEyeIcon({ className: 'dsh-trash-icon-sm' }),
-                            '查看'
+                            t('view')
                           ),
                           h('button', {
                             type: 'button',
@@ -899,7 +1049,7 @@ window.__ModuleLoader__.load({
                             onClick: () => handleUnarchive(item),
                           },
                             renderRestoreIcon({ className: 'dsh-trash-icon-sm' }),
-                            '还原'
+                            t('restore')
                           ),
                           h('button', {
                             type: 'button',
@@ -907,7 +1057,7 @@ window.__ModuleLoader__.load({
                             onClick: () => handlePurgeSingle(item.sessionId, displayTitle),
                           },
                             renderTrashIcon({ className: 'dsh-trash-icon-sm' }),
-                            '彻底删除'
+                            t('permanentlyDelete')
                           )
                         )
                       );
@@ -918,14 +1068,14 @@ window.__ModuleLoader__.load({
             ),
 
         // Footer Summary
-        items.length > 0 && h('div', { className: 'dsh-trash-footer' }, `共 ${items.length} 个归档会话`),
+        items.length > 0 && h('div', { className: 'dsh-trash-footer' }, t('archivedCount', { count: items.length })),
 
         // Modal 1: 查看内容 Message Preview Modal
         previewSession &&
           h('div', { className: 'dsh-trash-overlay', onClick: () => setPreviewSession(null) },
             h('div', { className: 'dsh-trash-preview', onClick: (e) => e.stopPropagation() },
               h('div', { className: 'dsh-trash-preview-header' },
-                h('div', { className: 'dsh-trash-preview-title' }, `查看会话：${previewSession.title}`),
+                h('div', { className: 'dsh-trash-preview-title' }, t('previewTitle', { title: previewSession.title })),
                 h('button', {
                   className: 'dsh-trash-close',
                   onClick: () => setPreviewSession(null),
@@ -933,13 +1083,13 @@ window.__ModuleLoader__.load({
               ),
               h('div', { className: 'dsh-trash-preview-body' },
                 previewLoading
-                  ? h('div', { className: 'dsh-trash-preview-state' }, '正在读取历史对话记录...')
+                  ? h('div', { className: 'dsh-trash-preview-state' }, t('loadingHistory'))
                   : previewMessages.length === 0
-                  ? h('div', { className: 'dsh-trash-preview-state' }, '暂无对话记录')
+                  ? h('div', { className: 'dsh-trash-preview-state' }, t('noHistory'))
                   : previewMessages.map((msg, index) =>
                       h('div', { key: index, className: 'dsh-trash-message' },
                         h('div', { className: 'dsh-trash-message-header' },
-                          h('span', { className: 'dsh-trash-message-role' }, msg.role === 'user' ? '👤 用户' : '🤖 助手'),
+                          h('span', { className: 'dsh-trash-message-role' }, msg.role === 'user' ? t('user') : t('assistant')),
                           msg.timestamp && h('span', { className: 'dsh-trash-message-time' }, formatTime(msg.timestamp))
                         ),
                         h('div', { className: msg.role === 'user' ? 'dsh-trash-bubble-user' : 'dsh-trash-bubble-assistant' },
@@ -958,8 +1108,8 @@ window.__ModuleLoader__.load({
               h('h3', { className: 'dsh-trash-modal-title' }, confirmModal.title),
               h('p', { className: 'dsh-trash-modal-body' }, confirmModal.body),
               h('div', { className: 'dsh-trash-modal-actions' },
-                h('button', { className: 'dsh-trash-btn-cancel', onClick: () => setConfirmModal(null) }, '取消'),
-                h('button', { className: 'dsh-trash-btn-confirm', onClick: confirmModal.onConfirm }, '确定删除')
+                h('button', { className: 'dsh-trash-btn-cancel', onClick: () => setConfirmModal(null) }, t('cancel')),
+                h('button', { className: 'dsh-trash-btn-confirm', onClick: confirmModal.onConfirm }, t('confirmDelete'))
               )
             )
           ),
@@ -972,7 +1122,7 @@ window.__ModuleLoader__.load({
           },
             h('div', { className: 'dsh-trash-tooltip-title' }, hoverTooltip.title),
             h('div', { className: 'dsh-trash-tooltip-sub' }, `ID: ${hoverTooltip.id}`),
-            h('div', { className: 'dsh-trash-tooltip-sub' }, `路径: ${hoverTooltip.path}`)
+            h('div', { className: 'dsh-trash-tooltip-sub' }, t('path', { path: hoverTooltip.path }))
           )
       );
     }
@@ -995,22 +1145,22 @@ window.__ModuleLoader__.load({
       const handleArchive = async (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
         if (!sessionId) {
-          showToastLayer('无法识别当前活动会话 ID');
+          showToastLayer(t('noActiveSession'));
           return;
         }
         const title = (session?.title || resolveSessionTitle(ctx, sessionId, '')) ?? '';
         try {
           await api(ctx, `${API_PREFIX}/archive`, { method: 'POST', body: { sessionId, title } });
           purgeFromBrowserSessionStore(ctx, [sessionId]);
-          showToastLayer(`已将会话「${title || '当前会话'}」移入回收站`, async () => {
+          showToastLayer(t('movedToBin', { title: title || t('currentSession') }), async () => {
             try {
               await api(ctx, `${API_PREFIX}/unarchive`, { method: 'POST', body: { sessionId } });
             } catch (e) {
-              console.error('撤销失败', e);
+              console.error(t('undoFailed'), e);
             }
           });
         } catch (err) {
-          showToastLayer(`移入回收站失败: ${err.message}`);
+          showToastLayer(t('moveFailed', { message: localizedError(err) }));
         }
       };
 
@@ -1019,7 +1169,7 @@ window.__ModuleLoader__.load({
         {
           type: 'button',
           className: 'dsh-trash-header-action',
-          title: '移入回收站',
+          title: t('moveToBin'),
           onClick: handleArchive,
         },
         renderTrashIcon({ width: 14, height: 14 })
@@ -1235,8 +1385,8 @@ window.__ModuleLoader__.load({
         button.type = 'button';
         button.className = 'dsh-trash-row-btn';
         button.dataset.dshSessionRecycleBinDelete = sessionId;
-        button.title = '移入回收站';
-        button.setAttribute('aria-label', '移入回收站');
+        button.title = t('moveToBin');
+        button.setAttribute('aria-label', t('moveToBin'));
         button.innerHTML =
           '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" ' +
           'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -1250,11 +1400,11 @@ window.__ModuleLoader__.load({
           try {
             await api(ctx, `${API_PREFIX}/archive`, { method: 'POST', body: { sessionId, title } });
             purgeFromBrowserSessionStore(ctx, [sessionId]);
-            showToastLayer(`已将会话「${title || '会话'}」移入回收站`, async () => {
+            showToastLayer(t('movedToBin', { title: title || t('session') }), async () => {
               await api(ctx, `${API_PREFIX}/unarchive`, { method: 'POST', body: { sessionId } });
             });
           } catch (err) {
-            showToastLayer(`移入回收站失败: ${err.message}`);
+            showToastLayer(t('moveFailed', { message: localizedError(err) }));
           }
         });
 
@@ -1267,7 +1417,7 @@ window.__ModuleLoader__.load({
     function injectSettingsMenuIcon() {
       if (typeof document === 'undefined') return;
       const candidates = [...document.querySelectorAll('*')].filter(
-        (el) => el.children.length === 0 && el.textContent?.trim() === '会话回收站'
+        (el) => el.children.length === 0 && el.textContent?.trim() === t('recycleBin')
       );
       for (const textEl of candidates) {
         const itemContainer =
@@ -1348,7 +1498,7 @@ window.__ModuleLoader__.load({
             name: 'settings.section',
             id: 'trash',
             order: 25,
-            label: () => '会话回收站',
+            label: () => t('recycleBin'),
           },
           (props) => TrashTab({ ...props, ctx })
         )
@@ -1360,7 +1510,7 @@ window.__ModuleLoader__.load({
             name: 'conversation.session.header.actions',
             id: 'delete-session',
             order: 400,
-            label: () => '删除会话',
+            label: () => t('deleteSession'),
           },
           (props) => DeleteSessionAction({ ...props, ctx })
         )

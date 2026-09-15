@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [Unreleased]
+
+### Added
+
+- English localization for all user-facing client UI. The plugin follows the
+  browser language, preserves Chinese for `zh` locales, and defaults to English
+  for every other locale. Known server fallback labels and error codes are
+  localized on the client without changing host behavior.
+
 ## [0.4.0] - 2026-09-12
 
 ### Fixed
