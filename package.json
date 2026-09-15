@@ -1,7 +1,7 @@
 {
   "name": "dsh-session-recycle-bin",
   "version": "0.4.0",
-  "description": "DSH 会话回收站：侧边栏删除图标、回收站多选还原/彻底删除、活跃会话保护。 · Session trash & permanent delete for DeepSeek Harness.",
+  "description": "Session recycle bin for DeepSeek Harness: restore, permanent delete, and active-session protection. · DSH 会话回收站。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -34,8 +34,8 @@
     "url": "https://github.com/Seetraum/harness-session-delete/issues"
   },
   "dsh": {
-    "displayName": "DSH 会话回收站",
-    "description": "DSH 会话回收站：侧边栏删除图标、回收站多选还原/彻底删除、活跃会话保护。",
+    "displayName": "DSH Session Recycle Bin / 会话回收站",
+    "description": "Session recycle bin with restore, permanent deletion, and active-session protection. · 会话回收站、还原、彻底删除与活跃会话保护。",
     "homepage": "https://github.com/Seetraum/harness-session-delete",
     "repository": "https://github.com/Seetraum/harness-session-delete",
     "bundle": {
