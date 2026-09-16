@@ -45,7 +45,7 @@ function makeEl(tag = 'div') {
 }
 
 /** Load the browser bundle and return its exports plus the captured registrations. */
-function loadClient(language = 'en-US') {
+function loadClient(language = 'en-US', services = {}) {
   const documentStub = {
     body: makeEl('body'), head: makeEl('head'), documentElement: makeEl('html'),
     createElement: (t) => makeEl(t), getElementById: () => null,
@@ -75,7 +75,7 @@ function loadClient(language = 'en-US') {
   const registrationOptions = {};
   const ctx = {
     effect: (fn) => { try { fn(); } catch { /* stub */ } },
-    get: () => undefined,
+    get: (name) => services[name],
     on: () => () => {}, typert: { on: () => () => {} },
     sessions: {
       list: { getSnapshot: () => ({ ids: [CURRENT], byId: { [CURRENT]: { id: CURRENT, title: 'T' } }, current: CURRENT, phase: 'ready' }) },
@@ -91,6 +91,34 @@ function loadClient(language = 'en-US') {
   mod.apply(ctx);
   return { registrations, registrationOptions, ctx };
 }
+
+/**
+ * Minimal stand-in for @deepseek-ai/dsh-client-locale's service face: it resolves
+ * an explicitly chosen locale, registers plugin dictionaries, and binds a
+ * translate function that reads the CURRENT active locale through the chain.
+ */
+function makeLocaleService(active) {
+  const dicts = new Map();
+  return {
+    active,
+    registered: [],
+    register(ns, table) {
+      if (dicts.has(ns)) throw new Error(`locale namespace "${ns}" already has locale "zh"`);
+      dicts.set(ns, table);
+      this.registered.push({ ns, table });
+      return () => dicts.delete(ns);
+    },
+    bind(ns) {
+      return (key, params = {}) => {
+        const table = dicts.get(ns) ?? {};
+        const template = table[this.active]?.[key] ?? table.en?.[key] ?? key;
+        return String(template).replace(/\{(\w+)\}/g, (_m, name) => String(params[name] ?? ''));
+      };
+    },
+    getLocale() { return { active: this.active }; },
+  };
+}
+
 
 /** Invoke the header action's click handler and report the archive request. */
 async function clickHeaderAction(props) {
@@ -119,7 +147,8 @@ describe('client header action (dual cohort)', () => {
     const call = await clickHeaderAction({});
     assert.ok(call, 'POST /archive must be issued — a ReferenceError here was the "click does nothing" bug');
     assert.equal(call.method, 'POST');
-    assert.equal(call.headers['x-dsh-locale'], 'en');
+    assert.equal(call.headers['x-dsh-plugin'], 'session-trash', 'the CSRF custom header the routes require');
+    assert.equal(call.headers['x-dsh-locale'], undefined, 'no locale header: the host does not read one');
     assert.equal(call.body.sessionId, CURRENT, 'active id resolves from the sessions.list snapshot current');
   });
 
@@ -166,6 +195,33 @@ describe('client header action (dual cohort)', () => {
     const { registrationOptions } = loadClient('zh-CN');
     assert.equal(registrationOptions['settings.section'].label(), '会话回收站');
     assert.equal(registrationOptions['conversation.session.header.actions'].label(), '删除会话');
+  });
+
+  test('the host Language setting wins over the browser (and registers our dictionaries)', () => {
+    // 0.1.5 mounts @deepseek-ai/dsh-client-locale as `locale`; its explicit
+    // setting beats the browser, so an English browser with a Chinese host
+    // setting must render Chinese — asking navigator directly got this wrong.
+    const service = makeLocaleService('zh');
+    const { registrationOptions } = loadClient('en-US', { locale: service });
+    assert.equal(registrationOptions['settings.section'].label(), '会话回收站');
+    assert.equal(registrationOptions['conversation.session.header.actions'].label(), '删除会话');
+    assert.equal(service.registered.length, 1, 'dictionaries are published to the locale service');
+    assert.equal(service.registered[0].ns, 'session-trash');
+    assert.ok(service.registered[0].table.zh && service.registered[0].table.en, 'both locales are published');
+  });
+
+  test('an English host setting wins over a Chinese browser', () => {
+    const service = makeLocaleService('en');
+    const { registrationOptions } = loadClient('zh-CN', { locale: service });
+    assert.equal(registrationOptions['settings.section'].label(), 'Session Recycle Bin');
+  });
+
+  test('a service that cannot resolve our namespace falls back to the built-in table', () => {
+    // bind() without our dictionaries returns the raw key; the plugin must then
+    // keep using its own table instead of rendering "recycleBin".
+    const foreign = { register: () => () => {}, bind: () => (key) => key, getLocale: () => ({ active: 'zh' }) };
+    const { registrationOptions } = loadClient('en-US', { locale: foreign });
+    assert.equal(registrationOptions['settings.section'].label(), '会话回收站', 'falls back to the host locale, not the raw key');
   });
 
   test('client exports.inject must not declare unprovided services like typert (0.1.5 regression)', async () => {

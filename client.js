@@ -138,15 +138,57 @@ window.__ModuleLoader__.load({
       },
     };
 
-    function resolveLocale() {
-      const language = window?.navigator?.language || window?.navigator?.languages?.[0] || '';
-      return /^zh(?:-|$)/i.test(language) ? 'zh' : 'en';
+    /**
+     * Host locale service (0.1.5 Web app mounts `@deepseek-ai/dsh-client-locale`
+     * as `locale`). It owns the Language row in Settings and resolves explicit
+     * choice → browser → English; the browser is only its fallback, so asking
+     * the browser directly would disagree with the rest of the app whenever the
+     * two differ.
+     *
+     * NEVER add 'locale' to exports.inject: older cohorts (0.1.1/0.1.2) have no
+     * such service, and a missing injection parks the whole fiber INACTIVE (the
+     * same failure the typert inject caused before). Probe it via ctx.get.
+     */
+    const LOCALE_NS = 'session-trash';
+    let hostLocale;
+    let hostTranslate;
+
+    function attachHostLocale(ctx) {
+      hostLocale = typeof ctx?.get === 'function' ? ctx.get('locale') : undefined;
+      if (!hostLocale || typeof hostLocale.register !== 'function' || typeof hostLocale.bind !== 'function') return;
+      try {
+        const dispose = hostLocale.register(LOCALE_NS, MESSAGES);
+        ctx.effect?.(() => dispose, 'session-trash: locale dictionaries');
+      } catch {
+        // A twin instance may already own the namespace; `bind` still resolves
+        // the same dictionaries, so fall through and probe below.
+      }
+      try {
+        const bound = hostLocale.bind(LOCALE_NS);
+        // Trust the service only once OUR keys resolve through it — translate()
+        // returns the raw key when the namespace carries no dictionary.
+        if (bound('recycleBin') !== 'recycleBin') hostTranslate = bound;
+      } catch { /* keep the built-in table */ }
     }
 
-    const UI_LOCALE = resolveLocale();
+    function browserLocale() {
+      return window?.navigator?.language || window?.navigator?.languages?.[0] || '';
+    }
+
+    /** Active language for the built-in table: host choice first, browser second. */
+    function activeLocale() {
+      let active;
+      try {
+        active = hostLocale?.getLocale?.()?.active ?? hostLocale?.getSnapshot?.()?.active;
+      } catch { /* service teardown — fall back to the browser */ }
+      return /^zh(?:-|$)/i.test(String(active || browserLocale())) ? 'zh' : 'en';
+    }
 
     function t(key, params = {}) {
-      const template = MESSAGES[UI_LOCALE]?.[key] ?? MESSAGES.en[key] ?? key;
+      if (hostTranslate) {
+        try { return hostTranslate(key, params); } catch { /* fall through */ }
+      }
+      const template = MESSAGES[activeLocale()]?.[key] ?? MESSAGES.en[key] ?? key;
       return String(template).replace(/\{(\w+)\}/g, (_match, name) => String(params[name] ?? ''));
     }
 
@@ -372,8 +414,11 @@ window.__ModuleLoader__.load({
         method: options.method || 'GET',
         headers: {
           'Content-Type': 'application/json',
+          // The host's only contract header: the minimal CSRF custom header the
+          // routes require on non-GET requests. No locale header is sent — the
+          // host does not read one, and server fallback labels are localized on
+          // this side by localizeServerFallback().
           'x-dsh-plugin': 'session-trash',
-          'x-dsh-locale': UI_LOCALE,
           ...(options.headers || {}),
         },
         body: options.body ? JSON.stringify(options.body) : undefined,
@@ -1479,6 +1524,9 @@ window.__ModuleLoader__.load({
     /** Plugin body apply */
     function apply(ctx) {
       injectStylesheet();
+      // Adopt the host Language setting (and publish our dictionaries) before
+      // anything renders a label.
+      attachHostLocale(ctx);
 
       // DSH 0.1.5 的 settings.section 注册契约只接受 id / order / label
       // （见 dsh-cordis-client-runner 内置的 slot 目录：registerOptions 就这三项，

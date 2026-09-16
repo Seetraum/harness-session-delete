@@ -11,10 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- English localization for all user-facing client UI. The plugin follows the
-  browser language, preserves Chinese for `zh` locales, and defaults to English
-  for every other locale. Known server fallback labels and error codes are
-  localized on the client without changing host behavior.
+- **Every user-facing client string is now localizable, following DSH's own language setting.** Built-in `zh` / `en` tables are registered with the host `locale` service (the 0.1.5 Web app mounts `@deepseek-ai/dsh-client-locale`, whose Settings row owns the choice): an explicit selection wins and only its absence falls back to the browser; when the service is unavailable (0.1.1 / 0.1.2 cohorts) the plugin keeps the built-in table plus the browser language, and `locale` is deliberately **not** added to `exports.inject` — a missing injection would park the whole fiber INACTIVE. Server fallback labels (未命名会话 / 其他项目 / 其他工作区) and the `SESSION_RUNNING` error code are localized client-side; host behavior is unchanged.
+- Removed the `x-dsh-locale` request header: it was sent on every call but the host never reads it (the host only honors `x-dsh-plugin`, its CSRF header).
+- Verification: client tests 9/9 (new cases cover "host setting beats the browser" and "fall back to the built-in table when the namespace is unresolvable"); full suite 36/36.
 
 ## [0.4.1] - 2026-09-16
 
