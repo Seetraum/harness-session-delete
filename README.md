@@ -4,6 +4,9 @@
 
 Move sessions into a recycle bin from the sidebar, restore or permanently delete them (single or batch), with live-session protection.
 
+The interface automatically follows the browser language: Chinese locales use
+Chinese and all other locales use English.
+
 [English](README.md) | [中文](README.zh.md)
 
 ---
