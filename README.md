@@ -19,7 +19,7 @@ Chinese and all other locales use English.
 - **True permanent delete** — physically removes the session log from disk and the projection-cache record; ghost sessions (records without a log) are cleaned up so they vanish instead of lingering.
 - **Live-session protection** — sessions with an active agent are refused deletion.
 - **Batch fault tolerance** — batch operations delete per-session with error collection and reporting.
-- **Light/dark adaptive UI** — all colors are CSS custom properties in `client.css`; components follow the resolved DSH appearance (`data-ds-dark-theme`) with `prefers-color-scheme` as the OS-level fallback (no hardcoded palette).
+- **Light/dark adaptive UI** — all colors are CSS custom properties in `client.css`; components follow the resolved DSH appearance (`data-ds-dark-theme`) with `prefers-color-scheme` as the OS-level fallback (no hardcoded palette). UI and code text follow the app font too (`--dsw-font-family` / `--ds-font-family-code`), so the Settings → 字体 choice applies here as well.
 
 ---
 
