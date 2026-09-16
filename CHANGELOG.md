@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.4.1] - 2026-09-16
+
+### Fixed
+
+- **A trashed conversation whose write handle the host still held showed "0 轮对话" and an empty 查看 preview.** `readSessionEvents` called `persistence.open(id)` without an access mode: the 0.1.5 jsonl backend branches on `access === "read"`, so a missing argument takes the single-writer path (`claimWrite` plus an exclusive lease) and reading a session the host still owns — the conversation the user just deleted and is still loaded — throws `SessionAlreadyOwnedError`, which was swallowed. The list reported `turnCount: 0` and the preview returned empty, for that session only. Reads now use `open(id, 'read')`; the older cohort has no `open()` (it is `inspect`-only), so the extra argument is inert. A failed read now warns once per session instead of staying silent.
+- Verification: the real-host fixture gained a "host still owns the session" stage (it fails before this fix) and passes 18/18 against a real 0.1.5-rc.2 package tree; unit tests pass 32/32 (the mock now asserts `access === 'read'`).
+
 ## [0.4.0] - 2026-09-12
 
 ### Fixed

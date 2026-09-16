@@ -207,9 +207,12 @@ describe('Session Trash Host Plugin Test Suite', () => {
       ],
       // 0.1.5: no inspect, no service-level findLog; locate still computes a path.
       locate: (meta) => ({ kind: 'jsonl', path: join(tempDir, meta.id, 'session.v3.jsonl') }),
-      // 0.1.5: handle-based reads.
-      open: async (id) => {
+      // 0.1.5: handle-based reads. The access argument is part of the
+      // contract — the real backend treats anything but 'read' as a
+      // single-writer claim.
+      open: async (id, access) => {
         assert.strictEqual(id, 'sess-v3');
+        assert.strictEqual(access, 'read', 'reads must open with read access');
         return {
           id,
           read: async () => ({ eventState: 'exclusive', events }),
@@ -281,5 +284,57 @@ describe('Session Trash Host Plugin Test Suite', () => {
     assert.ok(!mockState.archivedSessionIds.includes('sess-desc'), 'removed from archive set');
     const stillThere = await stat(sessDir).then(() => true).catch(() => false);
     assert.strictEqual(stillThere, false, 'physical session dir deleted via the descriptor path');
+  });
+
+  test('10. Regression: reading a session the host still owns must not zero the turn count', async () => {
+    // Real 0.1.5 backend contract (lib/index.js of
+    // @deepseek-ai/dsh-session-persistence-jsonl): open(id, access) branches on
+    // `access === 'read'`; anything else — including a missing argument — takes
+    // the single-writer path (tracker.claimWrite + an exclusive lease) and
+    // throws SessionAlreadyOwnedError when the host still holds the session
+    // open. A trashed conversation is usually still loaded, so `open(id)` made
+    // BOTH the recycle-bin turn count and the preview read empty; the plugin
+    // swallowed the error. This mock reproduces that backend semantics.
+    const events = [
+      { type: 'session/start', createdAt: 1 },
+      { type: 'user/message', createdAt: 2, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '真实用户提问' }] } },
+      { type: 'turn/start', createdAt: 3 },
+      { type: 'assistant/message', createdAt: 4, data: { message: { content: [{ type: 'text', text: '回答' }] } } },
+      { type: 'turn/start', createdAt: 5 },
+    ];
+    const openCalls = [];
+    const ownershipPersistence = {
+      // Header title falls back to the id (never-titled session) so the row
+      // exercises the derived-title path built from the stored events.
+      list: async () => [{ header: { id: 'sess-owned', title: 'sess-owned', cwd: '/work/proj10' }, revision: 1 }],
+      locate: () => ({ kind: 'jsonl', path: join(tempDir, 'sess-owned', 'session.v3.jsonl') }),
+      // Semantics of the real backend while the host holds the write handle.
+      open: async (id, access) => {
+        openCalls.push(access);
+        if (access !== 'read') {
+          const error = new Error(`session "${id}" is already owned by an active write handle`);
+          error.name = 'SessionAlreadyOwnedError';
+          throw error;
+        }
+        return { id, read: async () => ({ eventState: 'shared-frozen', events }), close: async () => {} };
+      },
+    };
+
+    const entities = new Map([
+      ['ws-10', { record: { path: '/work/proj10', title: 'Proj 10', sessionIds: ['sess-owned'] }, detachSession: async () => {} }],
+    ]);
+    const ownedCtx = { ...mockCtx, sessionPersistence: ownershipPersistence };
+    mockCtx.workspaceRegistry.entities = entities;
+    const ownedPlugin = new SessionTrashHost(ownedCtx);
+    await ownedPlugin[Symbol.for('cordis.init')]();
+
+    mockState.archivedSessionIds = ['sess-owned'];
+    const items = await mockCtx.workspaceRegistry.listArchivedSessions();
+    const owned = items.find((i) => i.sessionId === 'sess-owned');
+
+    assert.ok(owned, 'host-owned session still listed');
+    assert.deepStrictEqual(openCalls, ['read'], 'every read must ask for read access');
+    assert.strictEqual(owned.turnCount, 2, 'turn count survives a host-owned session');
+    assert.strictEqual(owned.title, '真实用户提问', 'derived title survives a host-owned session');
   });
 });

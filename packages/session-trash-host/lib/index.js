@@ -155,24 +155,55 @@ async function scanSessionLogPath(sessionId) {
 }
 
 /**
+ * Session ids whose event read failed and was reported once, so a broken
+ * artifact doesn't turn every recycle-bin refresh into a log flood.
+ */
+const readFailureReported = new Set();
+
+/**
  * Read one stored session's events across host cohorts.
- *  1. persistence.inspect(id)      — older host (0.1.1/0.1.2) returns { events }.
- *  2. persistence.open(id) → handle.read() → { events }  — 0.1.5 handle API.
+ *  1. persistence.inspect(id)                   — older host (0.1.1/0.1.2),
+ *                                                 returns { events }.
+ *  2. persistence.open(id, 'read') → handle.read() → { events } — 0.1.5
+ *     handle API.
+ *
+ * WHY THE ACCESS ARGUMENT IS MANDATORY (v0.4.1):
+ *
+ * `SessionPersistence.open(id, access, options)` does NOT default to read.
+ * The 0.1.5 jsonl backend branches on `access === "read"`; anything else —
+ * including `undefined` — falls through to the single-writer path
+ * (`tracker.claimWrite(id)` + a cross-process lease). Reading a session the
+ * host itself still has open (the normal case for the conversation the user
+ * just deleted, and for any session whose agent is idle but loaded) then
+ * throws SessionAlreadyOwnedError, and a session with no durable artifact
+ * yet throws NotFound. Both were swallowed below, so `listArchivedSessions`
+ * reported `turnCount: 0` and the preview route returned `messages: []`
+ * for exactly the sessions that were being viewed — while untouched
+ * sessions listed fine. A successful write open would also have claimed
+ * write ownership and taken an exclusive lease just to read.
+ *
+ * The older cohort has no `open()` at all (it is `inspect`-only), so the
+ * extra argument is inert there.
+ *
  * @param {object|undefined} persistence ctx.sessionPersistence
  * @param {string} sessionId
  * @returns {Promise<Array|undefined>} the event array, or undefined.
  */
 async function readSessionEvents(persistence, sessionId) {
+  let failure;
+
   try {
     if (typeof persistence?.inspect === 'function') {
       const stored = await persistence.inspect(sessionId);
       if (stored && Array.isArray(stored.events)) return stored.events;
     }
-  } catch { /* fall through */ }
+  } catch (error) {
+    failure = error;
+  }
 
   try {
     if (typeof persistence?.open === 'function') {
-      const handle = await persistence.open(sessionId);
+      const handle = await persistence.open(sessionId, 'read');
       try {
         const result = await handle.read();
         if (result && Array.isArray(result.events)) return result.events;
@@ -180,7 +211,17 @@ async function readSessionEvents(persistence, sessionId) {
         if (typeof handle?.close === 'function') await handle.close().catch(() => {});
       }
     }
-  } catch { /* fall through */ }
+  } catch (error) {
+    failure = error;
+  }
+
+  // Best effort: the caller renders a 0-turn row instead of failing the list.
+  // Report the underlying reason ONCE per session so a future contract drift
+  // is diagnosable instead of showing up as a silently empty recycle bin.
+  if (failure && !readFailureReported.has(sessionId) && readFailureReported.size < 200) {
+    readFailureReported.add(sessionId);
+    console?.warn?.(`session-trash-host: could not read events for "${sessionId}": ${failure.message ?? failure}`);
+  }
 
   return undefined;
 }
@@ -575,7 +616,7 @@ function patchWorkspaceRegistry(registry, ctx) {
           }
           // 读取已解压的会话事件（DSH 默认启用 Zstd 压缩，直接 readFile 读到的是
           // 二进制数据，无法解析为 JSON）。0.1.5 起 inspect 移除，改用
-          // open(id) → handle.read()（见 readSessionEvents）。
+          // open(id, 'read') → handle.read()（见 readSessionEvents）。
           const events = await readSessionEvents(persistence, sessionId);
           if (Array.isArray(events)) {
             // 统计 turn/start 事件数量作为真实对话轮数
@@ -980,7 +1021,7 @@ function registerRoutes(ctx) {
         }
 
         // 优先读取已解压的会话事件（DSH 默认启用 Zstd 压缩，直接 readFile 读到的是
-        // 二进制数据）。0.1.5 起 inspect 移除，改用 open(id) → handle.read()
+        // 二进制数据）。0.1.5 起 inspect 移除，改用 open(id, 'read') → handle.read()
         // （见 readSessionEvents）。
         try {
           const events = await readSessionEvents(persistence, sessionId);

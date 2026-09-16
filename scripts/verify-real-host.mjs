@@ -192,6 +192,52 @@ try {
 check('physical session directory removed', !stillOnDisk);
 check('archive set no longer contains the session', !(registry.requireState().archivedSessionIds || []).includes(SID));
 
+// ── Host-owned session stage ─────────────────────────────────────────
+// A conversation the user deletes is normally STILL LOADED in the host: the
+// sessions service keeps its write handle (and its lease) open. On the 0.1.5
+// cohort, SessionPersistence.open(id, access) branches on `access === 'read'`;
+// a missing argument takes the single-writer path and throws
+// SessionAlreadyOwnedError for exactly that session — which silently zeroed
+// the recycle-bin turn count and emptied the preview. Keep the handle open
+// here so this stage guards the contract.
+const SID2 = 'verify-sess-held';
+let heldHandle = null;
+try {
+  const events2 = [
+    { type: 'turn/start', seq: 0, time: NOW, data: { turn: 1 } },
+    { type: 'user/message', seq: 1, time: NOW, surfaceOp: 'append', data: { id: 'msg-u2', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '持有中的用户消息' }] } },
+    { type: 'assistant/message', seq: 2, time: NOW, surfaceOp: 'append', data: { turn: 1, step: 1, message: { id: 'msg-a2', role: 'assistant', source: { kind: 'model', provider: 'test', model: 'test' }, content: [{ type: 'text', text: '持有中的助手回复' }] }, stream: [] } },
+  ];
+  const created2 = await persistence.create({ version: HOST_FORMAT_VERSION, id: SID2, createdAt: NOW, cwd: ROOT, isSeeded: false }, 0);
+  if (created2 && typeof created2.append === 'function') {
+    await created2.append(events2);
+    await created2.flush();
+    heldHandle = created2; // deliberately NOT closed: the host still owns it
+    check('host-owned stage: session stored and left open (write handle alive)', true);
+  } else {
+    await persistence.append(SID2, events2);
+    check('host-owned stage: session stored and left open (write handle alive)', true, 'handle API absent — <=0.1.2 cohort');
+  }
+} catch (error) {
+  check('host-owned stage: session stored and left open (write handle alive)', false, String(error.message).slice(0, 180));
+}
+
+const archived2 = await callRoute('/api/session-trash/archive', { method: 'POST', body: { sessionId: SID2, title: 'Held Session' } });
+check('host-owned: POST /archive succeeds', archived2.status === 200 && archived2.body?.ok === true, JSON.stringify(archived2.body).slice(0, 140));
+
+const list2 = await callRoute('/api/session-trash/list');
+const item2 = list2.body?.data?.items?.find((i) => i.sessionId === SID2);
+check('host-owned: turnCount survives a session the host still owns', item2?.turnCount === 1, 'turnCount=' + item2?.turnCount);
+
+const messages2 = await callRoute('/api/session-trash/messages', { query: 'sessionId=' + SID2 });
+const msgs2 = messages2.body?.data?.messages ?? [];
+check('host-owned: preview still extracts user + assistant text',
+  msgs2.some((m) => String(m.content).includes('持有中的用户消息')) && msgs2.some((m) => String(m.content).includes('持有中的助手回复')),
+  msgs2.length + ' messages');
+
+if (heldHandle) await heldHandle.close().catch(() => {});
+await callRoute('/api/session-trash/purge', { method: 'POST', body: { sessionIds: [SID2] } });
+
 const failed = results.filter((r) => !r.ok);
 console.log('\nRESULT: ' + (results.length - failed.length) + '/' + results.length + ' checks passed');
 if (failed.length) {
