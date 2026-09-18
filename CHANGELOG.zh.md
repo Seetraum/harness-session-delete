@@ -7,13 +7,13 @@
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
-## [Unreleased]
+## [0.4.3] - 2026-09-18
 
 ### 修复
 
-- **设置页与撤销提示现在跟随 Web 全局字体（设置 → 字体）。** 此前 `client.css` 把自己的字体栈钉死在 `:root { --dstrb-font: -apple-system, … }`，于是回收站页面用默认字体渲染，而设置面板其它分节都用用户选定的字体。外壳用 `font-family: var(--dsw-font-family, …)` 绘制 `<body>`，`dsh-ui-font` 在 **body** 层覆写 `--dsw-font-family` / `--ds-font-family-code`；本插件改为**在使用点**解析这两个宿主令牌 —— `.dsh-trash-container` 与挂到 `document.body` 的 `.dsh-trash-toast` 负责正文，各代码/等宽位置解析代码字体 —— 并为不提供这两个令牌的宿主保留 `--dstrb-font-fallback` / `--dstrb-mono-fallback` 具体兜底栈。**不能在 `:root` 做别名**：自定义属性里的 `var()` 引用在**声明它的元素**上就完成替换，继承下去的是替换后的计算值，因此 `:root` 别名会被冻结在默认栈上、感知不到 body 层覆写。`--dstrb-font` / `--dstrb-mono` 仍可作为覆盖钩子使用。
-- 显式浅色分支（`body:not([data-ds-dark-theme])`）不再重复声明字体令牌。字体不是配色状态，在那里重新声明会把默认栈又钉回去。
-- 验证：新增 `tests/client-font-routing.test.js`（5 条用例，在修复前的样式表上全部失败）；全量 36/36 通过。
+- **设置页与撤销提示现在跟随全局字体（设置 → 字体）。** 此前 `client.css` 把字体栈钉在 `:root`，于是本页始终用默认字体，而设置面板其它分节都跟随用户选择。现改为在**使用点**解析宿主令牌（`--dsw-font-family` / `--ds-font-family-code`）——在 `:root` 做别名会在外壳于 body 层覆写之前就被冻结——并为不提供这两个令牌的宿主保留 `--dstrb-font-fallback` / `--dstrb-mono-fallback` 具体兜底栈。`--dstrb-font` / `--dstrb-mono` 仍可作为覆盖钩子使用。
+- 显式浅色分支（`body:not([data-ds-dark-theme])`）不再重复声明字体令牌；字体不是配色状态，在那里重声明会把默认栈又钉回去。
+- 验证：新增 `tests/client-font-routing.test.js`（5 条用例，在修复前的样式表上全部失败）；全量 41/41 通过。
 
 ## [0.4.2] - 2026-09-16
 

@@ -7,13 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
-## [Unreleased]
+## [0.4.3] - 2026-09-18
 
 ### Fixed
 
-- **The settings page and the undo toast now follow the app-wide font (Settings → 字体).** `client.css` pinned its own stacks (`:root { --dstrb-font: -apple-system, … }`), so the recycle-bin page rendered in the stock face while every other settings section used the chosen one. The shell paints `<body>` with `font-family: var(--dsw-font-family, …)` and dsh-ui-font swaps `--dsw-font-family` / `--ds-font-family-code` on `<body>`; the plugin now resolves those host tokens **at the point of use** — `.dsh-trash-container` and the body-portaled `.dsh-trash-toast` for UI text, every code/mono site for code — with concrete `--dstrb-font-fallback` / `--dstrb-mono-fallback` stacks for hosts that publish neither token. The tokens cannot simply be aliased at `:root`: a custom property's `var()` references are substituted at computed-value time on the element that declares them and that computed value is what inherits, so a `:root` alias would freeze the stock value and ignore the body-level override. `--dstrb-font` / `--dstrb-mono` remain usable as optional override hooks.
-- The explicit-light branch (`body:not([data-ds-dark-theme])`) no longer re-declares the font tokens. Fonts are not palette state, and re-declaring them there pinned the stock stack back on for an explicit light appearance.
-- Verification: new `tests/client-font-routing.test.js` (5 cases, all failing against the pre-fix stylesheet); full suite 36/36.
+- **The settings page and the undo toast now follow the app-wide font (Settings → 字体).** `client.css` pinned its own stacks at `:root`, so this page kept the stock face while every other settings section used the chosen one. The host tokens (`--dsw-font-family` / `--ds-font-family-code`) are now resolved at the point of use — aliasing them at `:root` would freeze the value before the shell's body-level override — with concrete `--dstrb-font-fallback` / `--dstrb-mono-fallback` stacks for hosts that publish neither. `--dstrb-font` / `--dstrb-mono` remain usable as optional override hooks.
+- The explicit-light branch (`body:not([data-ds-dark-theme])`) no longer re-declares the font tokens; fonts are not palette state, and re-declaring them there re-pinned the stock stack.
+- Verification: new `tests/client-font-routing.test.js` (5 cases, all failing against the pre-fix stylesheet); full suite 41/41.
 
 ## [0.4.2] - 2026-09-16
 
