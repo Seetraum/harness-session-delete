@@ -20,8 +20,22 @@
 /* ------------------------------------------------------------------ */
 
 :root {
-  --dstrb-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-  --dstrb-mono: SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  /* FONT STACKS ARE RESOLVED AT THE POINT OF USE, NOT HERE.
+   *
+   * These two tokens are the last-resort fallbacks for hosts that do not
+   * publish the shell's own font tokens (older DSH builds, the standalone
+   * test harness). They are deliberately CONCRETE stacks: a custom property
+   * whose value contains var() is substituted at computed-value time on the
+   * element that DECLARES it, and that computed value is what inherits. So
+   *     :root { --dstrb-font: var(--dsw-font-family); }
+   * would freeze the :root-scoped stock stack and would NOT follow the
+   * body-level `--dsw-font-family` override that dsh-ui-font installs for the
+   * whole app — the plugin page would keep rendering in the default face.
+   * The effective font is therefore routed at the use sites (see the
+   * "Font routing" block below), where the inherited DSH tokens are visible.
+   */
+  --dstrb-font-fallback: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  --dstrb-mono-fallback: SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
 
   /* Text */
   --dstrb-text-strong: #1a202c;
@@ -198,8 +212,9 @@ body[data-ds-dark-theme] {
 /*  (fixes near-white titles on a light page).                          */
 
 body:not([data-ds-dark-theme]) {
-  --dstrb-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-  --dstrb-mono: SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  /* Fonts are NOT palette state: they are routed once, at the point of use,
+     in the "Font routing" block above — do not re-declare them here, or the
+     explicit-light branch would pin the plugin back to the stock stack. */
 
   /* Text */
   --dstrb-text-strong: #1a202c;
@@ -263,6 +278,26 @@ body:not([data-ds-dark-theme]) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Font routing — follow the DSH shell, stay overridable              */
+/* ------------------------------------------------------------------ */
+/*
+ * The shell paints `<body>` with `font-family: var(--dsw-font-family, …)`
+ * and dsh-ui-font swaps that token at the body level to apply the user's
+ * Settings → 字体 choice (and `--ds-font-family-code` for code faces)
+ * across the whole app. Referencing those host tokens HERE — on the plugin
+ * roots, where the inherited values are already in scope — is what makes
+ * the settings page and the portaled toast track the app font, live.
+ *
+ * --dstrb-font / --dstrb-mono remain available as optional override hooks:
+ * a theme may still declare either one higher up the tree and it wins,
+ * because the fallback chain is evaluated at the use site.
+ */
+.dsh-trash-container,
+.dsh-trash-toast {
+  font-family: var(--dstrb-font, var(--dsw-font-family, var(--dstrb-font-fallback)));
+}
+
+/* ------------------------------------------------------------------ */
 /*  Page container — width follows the window ratio (no fixed px cap) */
 /* ------------------------------------------------------------------ */
 
@@ -270,7 +305,6 @@ body:not([data-ds-dark-theme]) {
   width: 90%;
   padding: 24px;
   margin: 0 auto;
-  font-family: var(--dstrb-font);
   color: var(--dstrb-text);
   color-scheme: light dark; /* native select/checkbox follow the resolved mode */
 }
@@ -479,7 +513,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 .dsh-trash-group-path {
   font-size: 11px;
   color: var(--dstrb-text-faint);
-  font-family: var(--dstrb-mono);
+  font-family: var(--dstrb-mono, var(--ds-font-family-code, var(--dstrb-mono-fallback)));
   margin-left: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -711,7 +745,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 .dsh-trash-tooltip-sub {
   font-size: 11px;
   color: var(--dstrb-tooltip-muted);
-  font-family: var(--dstrb-mono);
+  font-family: var(--dstrb-mono, var(--ds-font-family-code, var(--dstrb-mono-fallback)));
   word-break: break-all;
 }
 
@@ -962,7 +996,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
   background-color: var(--dstrb-code-inline-bg);
   padding: 2px 5px;
   border-radius: 4px;
-  font-family: var(--dstrb-mono);
+  font-family: var(--dstrb-mono, var(--ds-font-family-code, var(--dstrb-mono-fallback)));
   font-size: 0.9em;
   color: var(--dstrb-code-inline-text);
 }
@@ -974,7 +1008,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
   border-radius: 8px;
   overflow-x: auto;
   margin: 10px 0;
-  font-family: var(--dstrb-mono);
+  font-family: var(--dstrb-mono, var(--ds-font-family-code, var(--dstrb-mono-fallback)));
   font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -1050,7 +1084,8 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
   align-items: center;
   gap: 12px;
   font-size: 13px;
-  font-family: var(--dstrb-font);
+  /* font-family comes from the "Font routing" block (it is portaled to
+     <body>, outside .dsh-trash-container, so it is routed there too). */
   pointer-events: auto;
   transition: all 0.2s ease;
   opacity: 0;
