@@ -733,6 +733,7 @@ window.__ModuleLoader__.load({
           const value = await api(ctx, `${API_PREFIX}/list`);
           setItems(value?.items ?? []);
         } catch (err) {
+          setItems([]);  // 出错时清空，避免残留数据导致状态不一致
           setError(err.message || t('loadFailed'));
         } finally {
           setLoading(false);
@@ -790,12 +791,16 @@ window.__ModuleLoader__.load({
               if (failedIds.has(sessionId)) {
                 const errItem = result.errors.find((e) => e.sessionId === sessionId);
                 showToastLayer(t('deleteFailed', { message: localizedError(errItem) }));
+                setConfirmModal(null);
               } else {
                 purgeFromBrowserSessionStore(ctx, [sessionId]);
+                // 先更新本地状态
+                setItems((prev) => prev.filter((item) => item.sessionId !== sessionId));
+                setConfirmModal(null);
                 showToastLayer(t('deleted'));
+                // 再从服务器同步
+                await loadItems();
               }
-              setConfirmModal(null);
-              loadItems();
             } catch (err) {
               showToastLayer(t('deleteFailed', { message: localizedError(err) }));
             }
@@ -805,20 +810,23 @@ window.__ModuleLoader__.load({
 
       /** 物理彻底删除指定工作区下的所有/选中的归档会话 */
       const handlePurgeWorkspace = async (workspacePath, workspaceTitle, groupItems) => {
+        const idsToDelete = groupItems.map((i) => i.sessionId);
         setConfirmModal({
           title: t('deleteArchivedTitle'),
-          body: t('deleteWorkspaceBody', { title: workspaceTitle, count: groupItems.length }),
+          body: t('deleteWorkspaceBody', { title: workspaceTitle, count: idsToDelete.length }),
           onConfirm: async () => {
             try {
-              const ids = groupItems.map((i) => i.sessionId);
-              const result = await api(ctx, `${API_PREFIX}/purge-workspace`, { method: 'POST', body: { workspacePath, sessionIds: ids } });
+              const result = await api(ctx, `${API_PREFIX}/purge-workspace`, { method: 'POST', body: { workspacePath, sessionIds: idsToDelete } });
               const failedIds = new Set((result?.errors ?? []).map((e) => e.sessionId));
-              const succeededIds = ids.filter((id) => !failedIds.has(id));
+              const succeededIds = idsToDelete.filter((id) => !failedIds.has(id));
               purgeFromBrowserSessionStore(ctx, succeededIds);
-              setConfirmModal(null);
               setActiveWorkspaceMenu(null);
-              loadItems();
+              // 先更新本地状态
+              setItems((prev) => prev.filter((item) => !succeededIds.includes(item.sessionId)));
+              setConfirmModal(null);
               showToastLayer(t('deletedSelected'));
+              // 再从服务器同步
+              await loadItems();
             } catch (err) {
               showToastLayer(t('deleteFailed', { message: localizedError(err) }));
             }
@@ -828,17 +836,22 @@ window.__ModuleLoader__.load({
 
       /** 彻底删除全部归档会话 */
       const handleEmptyAll = () => {
+        const countToDelete = items.length;
         setConfirmModal({
           title: t('deleteAllTitle'),
-          body: t('deleteAllBody', { count: items.length }),
+          body: t('deleteAllBody', { count: countToDelete }),
           onConfirm: async () => {
             try {
               const ids = items.map((i) => i.sessionId);
               await api(ctx, `${API_PREFIX}/empty`, { method: 'POST' });
               purgeFromBrowserSessionStore(ctx, ids);
+              // 先清空本地状态，确保 UI 立即反馈
+              setItems([]);
+              // 再关闭弹窗并显示提示
               setConfirmModal(null);
-              loadItems();
-              showToastLayer(t('emptied', { count: items.length }));
+              showToastLayer(t('emptied', { count: countToDelete }));
+              // 最后强制从服务器重新加载（确保数据一致性）
+              await loadItems();
             } catch (err) {
               showToastLayer(t('emptyFailed', { message: localizedError(err) }));
             }
