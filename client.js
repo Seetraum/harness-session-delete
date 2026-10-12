@@ -687,6 +687,35 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** Error Boundary - catches render errors that would cause blank page */
+    class ErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+      }
+      componentDidCatch(error, errorInfo) {
+        console.error('session-trash: render error caught:', error, errorInfo);
+      }
+      render() {
+        if (this.state.hasError) {
+          return h('div', {
+            style: 'background:#e53e3e;color:#fff;padding:20px;margin:20px;border-radius:8px;'
+          }, [
+            h('h2', null, '渲染错误'),
+            h('p', null, `错误: ${this.state.error?.message || '未知错误'}`),
+            h('button', {
+              style: 'padding:8px 16px;margin-top:10px;cursor:pointer;',
+              onClick: () => this.setState({ hasError: false, error: null })
+            }, '重试')
+          ]);
+        }
+        return this.props.children;
+      }
+    }
+
     /** TrashTab Component */
     function TrashTab({ ctx }) {
       const [items, setItems] = useState([]);
@@ -1548,7 +1577,7 @@ window.__ModuleLoader__.load({
             order: 25,
             label: () => t('recycleBin'),
           },
-          (props) => TrashTab({ ...props, ctx })
+          (props) => h(ErrorBoundary, null, h(TrashTab, { ...props, ctx }))
         )
       );
 
