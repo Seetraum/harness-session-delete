@@ -337,4 +337,66 @@ describe('Session Trash Host Plugin Test Suite', () => {
     assert.strictEqual(owned.turnCount, 2, 'turn count survives a host-owned session');
     assert.strictEqual(owned.title, '真实用户提问', 'derived title survives a host-owned session');
   });
+
+  test('11. non-string session titles are coerced to strings (React child safety)', async () => {
+    // Regression: a session header can carry a non-string `title` (in the
+    // field, an empty object for a session that never received a real
+    // prompt). The client renders `title` as a React child, and React 18
+    // throws "Objects are not valid as a React child" for an object, which
+    // blanks the whole Settings panel. The host must never emit one.
+    const oddPersistence = {
+      list: async () => [
+        { id: 'sess-obj', title: {}, cwd: '/work/odd' },
+        { id: 'sess-num', title: 42, cwd: '/work/odd' },
+        { id: 'sess-str', title: 'Real Title', cwd: '/work/odd' },
+        { id: 'sess-null', title: null, cwd: '/work/odd' },
+      ],
+      locate: (header) => ({ path: join(tempDir, header.id, 'session.jsonl') }),
+      findLog: async (id) => join(tempDir, id, 'session.jsonl'),
+    };
+    const entities = new Map([
+      ['ws-odd', { record: { path: '/work/odd', title: 'Odd Proj', sessionIds: ['sess-obj', 'sess-num', 'sess-str', 'sess-null'] }, detachSession: async () => {} }],
+    ]);
+
+    mockState.archivedSessionIds = ['sess-obj', 'sess-num', 'sess-str', 'sess-null'];
+    mockCtx.workspaceRegistry.entities = entities;
+    const oddCtx = { ...mockCtx, sessionPersistence: oddPersistence };
+    const oddPlugin = new SessionTrashHost(oddCtx);
+    await oddPlugin[Symbol.for('cordis.init')]();
+
+    const items = await mockCtx.workspaceRegistry.listArchivedSessions();
+
+    for (const item of items) {
+      assert.strictEqual(
+        typeof item.title,
+        'string',
+        `${item.sessionId}: title must be a string, got ${typeof item.title}`,
+      );
+    }
+    const byId = new Map(items.map((i) => [i.sessionId, i.title]));
+    assert.strictEqual(byId.get('sess-obj'), '未命名会话', 'object title falls back to the unnamed label');
+    assert.strictEqual(byId.get('sess-num'), '42', 'numeric title is stringified');
+    assert.strictEqual(byId.get('sess-str'), 'Real Title', 'string title is preserved');
+    assert.strictEqual(byId.get('sess-null'), '未命名会话', 'null title falls back to the unnamed label');
+  });
+
+  test('12. archiveSession never persists a non-string title', async () => {
+    // Regression for the other half of the blank-page bug: the client used to
+    // POST the host's own slot prop verbatim, and that prop can be an object
+    // ({} for a session without a generated title). `{}` is truthy, so the old
+    // `if (title)` guard persisted it into archivedTitles, and the next /list
+    // handed it to React as a child -> throw -> blank recycle bin.
+    await mockRegistry.archiveSession('sess-obj-title', {});
+    await mockRegistry.archiveSession('sess-num-title', 42);
+    await mockRegistry.archiveSession('sess-str-title', 'Real Title');
+
+    const state = mockRegistry.requireState();
+    assert.deepStrictEqual(
+      state.archivedSessionIds,
+      ['sess-1', 'sess-2', 'sess-obj-title', 'sess-num-title', 'sess-str-title'],
+    );
+    assert.ok(!('sess-obj-title' in state.archivedTitles), 'an object title must not be persisted');
+    assert.strictEqual(state.archivedTitles['sess-num-title'], '42');
+    assert.strictEqual(state.archivedTitles['sess-str-title'], 'Real Title');
+  });
 });

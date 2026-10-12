@@ -69,6 +69,27 @@ function normalizeStoredHeader(item) {
 }
 
 /**
+ * Coerce a title-ish value to a string before it leaves the host.
+ *
+ * The `title` fields below are rendered by the client as React children.
+ * React 18 throws "Objects are not valid as a React child (found: object
+ * with keys ...)" when a non-string/non-number value reaches the render
+ * path, which crashes the whole TrashTab subtree and leaves a blank
+ * Settings panel. Session headers can occasionally carry a plain object
+ * (e.g. an empty object for a session that never received a real prompt),
+ * so normalize at the source instead of relying on the client to defend.
+ *
+ * @param {unknown} value     candidate title
+ * @param {string} fallback   returned when `value` is neither string nor number
+ * @returns {string}
+ */
+function toSafeTitle(value, fallback) {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  return fallback;
+}
+
+/**
  * Resolve one session's physical log path across host cohorts.
  *
  * Priority:
@@ -387,7 +408,16 @@ function patchWorkspaceRegistry(registry, ctx) {
       if (!currentArchived.includes(sessionId)) {
         const newArchived = [...currentArchived, sessionId];
         const newTitles = { ...currentTitles };
-        if (title) newTitles[sessionId] = title;
+        // Only persist a real string. `title` arrives from the client, which
+        // historically forwarded the host's own slot prop verbatim — and that
+        // prop can be an object ({} for a session without a generated title).
+        // `{}` is truthy, so a bare `if (title)` stored it, and listArchived-
+        // Sessions later handed it to React as a child, which throws and blanks
+        // the recycle bin. Dropping it here lets the /list fallback derive a
+        // proper title from the header instead.
+        const safeTitle = toSafeTitle(title, '');
+        if (safeTitle) newTitles[sessionId] = safeTitle;
+        else delete newTitles[sessionId]; // drop any stale non-string entry
         await registry.setState({
           ...state,
           archivedSessionIds: newArchived,
@@ -588,7 +618,7 @@ function patchWorkspaceRegistry(registry, ctx) {
           if (archivedIds.includes(sid) && !workspaceBySession.has(sid)) {
             workspaceBySession.set(sid, {
               workspacePath: entity.record.path,
-              workspaceTitle: entity.record.title,
+              workspaceTitle: toSafeTitle(entity.record.title, entity.record.path),
             });
           }
         }
@@ -641,7 +671,7 @@ function patchWorkspaceRegistry(registry, ctx) {
 
         return {
           sessionId,
-          title: finalTitle,
+          title: toSafeTitle(finalTitle, '未命名会话'),
           cwd: header?.cwd,
           workspacePath: ws?.workspacePath || ws?.cwd,
           workspaceTitle: ws?.workspaceTitle,
@@ -659,13 +689,13 @@ function patchWorkspaceRegistry(registry, ctx) {
       for (const entity of entities.values()) {
         const path = entity.record.path;
         workspaceOrder.push(path);
-        workspaceGrouped.set(path, { path, title: entity.record.title, items: [] });
+        workspaceGrouped.set(path, { path, title: toSafeTitle(entity.record.title, path), items: [] });
       }
     }
     for (const item of items) {
       const key = item.workspacePath || item.cwd || '其他工作区';
       if (!workspaceGrouped.has(key)) {
-        workspaceGrouped.set(key, { path: key, title: item.workspaceTitle || '其他项目', items: [] });
+        workspaceGrouped.set(key, { path: key, title: toSafeTitle(item.workspaceTitle, '其他项目'), items: [] });
         workspaceOrder.push(key);
       }
       workspaceGrouped.get(key).items.push(item);
@@ -821,7 +851,7 @@ function registerRoutes(ctx) {
           if (!wsBySession.has(sid)) {
             wsBySession.set(sid, {
               workspacePath: entity.record.path,
-              workspaceTitle: entity.record.title,
+              workspaceTitle: toSafeTitle(entity.record.title, entity.record.path),
             });
           }
         }
@@ -834,7 +864,7 @@ function registerRoutes(ctx) {
         const ws = wsBySession.get(sessionId);
         return {
           sessionId,
-          title: header?.title ?? ws?.workspaceTitle ?? String(sessionId),
+          title: toSafeTitle(header?.title ?? ws?.workspaceTitle, sessionId),
           cwd: header?.cwd,
           workspacePath: ws?.workspacePath,
           workspaceTitle: ws?.workspaceTitle,

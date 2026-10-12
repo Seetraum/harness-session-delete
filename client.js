@@ -671,11 +671,38 @@ window.__ModuleLoader__.load({
         // 如果浏览器 store 中的标题就是 sessionId 本身，说明该会话已被归档、
         // 浏览器 store 中只剩占位符，此时应优先使用服务端返回的 fallback 标题
         // （服务端从 archivedTitles 或日志解析中获取了正确的名称）。
-        if (title && title !== sessionId) return title;
-        return fallback;
+        //
+        // toTitleString 是必须的：DSH 的会话 store 对"尚未生成标题"的会话可能
+        // 存着一个对象（实测为空对象 {}），而 {} 是 truthy，会被原样返回。该
+        // 对象随后会：(a) 被 POST 进 /archive 并持久化到 archivedTitles，
+        // (b) 作为 React child 渲染 —— React 18 抛 "Objects are not valid as a
+        // React child"，整个回收站子树被错误边界吞掉后只剩空白页；(c) 在搜索
+        // 路径上被 .toLowerCase() 调用而抛 TypeError。统一在这里收敛成字符串。
+        const resolved = toTitleString(title, sessionId);
+        if (resolved && resolved !== sessionId) return resolved;
+        return toTitleString(fallback, '');
       } catch {
-        return fallback;
+        return toTitleString(fallback, '');
       }
+    }
+
+    /**
+     * Coerce a title-ish value to a string.
+     *
+     * Session titles come from two untrusted places — the DSH browser store
+     * (`byId[id].title`) and the slot props (`session.title`) — and both can
+     * carry a non-string (an empty object for a session that has no generated
+     * title yet). Every value that reaches an HTTP body, plugin state or a
+     * React child must therefore pass through here first.
+     *
+     * @param {unknown} value
+     * @param {string} fallback returned when `value` is neither string nor number
+     * @returns {string}
+     */
+    function toTitleString(value, fallback) {
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number') return String(value);
+      return typeof fallback === 'string' ? fallback : '';
     }
 
     /** 当前活动会话 ID：sessions.list 快照的 `current` 字段（0.1.1-rc.2 与 0.1.5-rc.1 均提供）。 */
@@ -1206,7 +1233,15 @@ window.__ModuleLoader__.load({
           showToastLayer(t('noActiveSession'));
           return;
         }
-        const title = (session?.title || resolveSessionTitle(ctx, sessionId, '')) ?? '';
+        // `session.title` comes straight from the host slot props and can be a
+        // non-string (an object for a not-yet-titled session). It is a truthy
+        // object, so a plain `||` would forward it to /archive, where it gets
+        // persisted into archivedTitles and later rendered as a React child
+        // (blanking the recycle bin). Coerce before it crosses the wire.
+        const title = toTitleString(
+          toTitleString(session?.title, '') || resolveSessionTitle(ctx, sessionId, ''),
+          '',
+        );
         try {
           await api(ctx, `${API_PREFIX}/archive`, { method: 'POST', body: { sessionId, title } });
           purgeFromBrowserSessionStore(ctx, [sessionId]);
@@ -1249,7 +1284,9 @@ window.__ModuleLoader__.load({
       const byId = ctx?.sessions?.list?.getSnapshot()?.byId ?? {};
       const index = new Map();
       for (const [id, record] of Object.entries(byId)) {
-        const title = record?.title;
+        // Normalize first: the store may hold an object for a session without
+        // a generated title, and an object key could never match a row label.
+        const title = toTitleString(record?.title, '');
         if (!title) continue;
         const list = index.get(title) ?? [];
         list.push(id);
