@@ -978,6 +978,15 @@ window.__ModuleLoader__.load({
             )
         ),
 
+        // ===== DEBUG PANEL (临时调试) =====
+        h('div', {
+          style: 'background:#ff6b6b;padding:8px;margin:8px 0;border-radius:4px;font-size:12px;color:#fff;'
+        }, [
+          h('strong', null, '[DEBUG] 状态: '),
+          h('span', null, `loading=${loading} | error=${error ? '有' : '无'} | items=${items?.length ?? '?'} | groups=${groupedWorkspaces?.length ?? '?'}`)
+        ]),
+        // ===== DEBUG PANEL 结束 =====
+
         // List Content
         loading
           ? h('div', { className: 'dsh-trash-state' }, t('loading'))
