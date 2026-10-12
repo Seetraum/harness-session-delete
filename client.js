@@ -874,45 +874,52 @@ window.__ModuleLoader__.load({
       }, [items]);
 
       // 过滤、排序并按工作区分组
+      // 注意：移除了 ctx 依赖，避免因 ctx 引用变化导致频繁重算
       const groupedWorkspaces = React.useMemo(() => {
-        let list = [...items];
+        try {
+          let list = Array.isArray(items) ? [...items] : [];
 
-        if (searchQuery.trim()) {
-          const q = searchQuery.trim().toLowerCase();
-          list = list.filter((i) => {
-            const title = (currentTitle(i.sessionId, i.title) || i.sessionId).toLowerCase();
-            return title.includes(q);
-          });
-        }
-
-        if (filterWorkspace) {
-          list = list.filter((i) => (i.workspacePath || i.cwd) === filterWorkspace);
-        }
-
-        // 按工作区分组（保持服务端返回的工作区顺序，与左侧 sidebar 一致）
-        const groups = new Map();
-        const groupOrder = [];
-        for (const item of list) {
-          const key = item.workspacePath || item.cwd || t('otherWorkspaces');
-          const title = localizeServerFallback(item.workspaceTitle) || (item.cwd ? item.cwd.split('/').pop() : t('unnamedProject'));
-          if (!groups.has(key)) {
-            groups.set(key, { path: key, title, items: [] });
-            groupOrder.push(key);
+          if (searchQuery.trim()) {
+            const q = searchQuery.trim().toLowerCase();
+            list = list.filter((i) => {
+              const title = (currentTitle(i.sessionId, i.title) || i.sessionId).toLowerCase();
+              return title.includes(q);
+            });
           }
-          groups.get(key).items.push(item);
-        }
 
-        // 每个工作区内部按时间排序，不影响工作区之间的顺序
-        for (const group of groups.values()) {
-          group.items.sort((a, b) => {
-            const timeA = a.archivedAt || 0;
-            const timeB = b.archivedAt || 0;
-            return sortOrder === 'asc' ? timeA - timeB : timeB - timeA;
-          });
-        }
+          if (filterWorkspace) {
+            list = list.filter((i) => (i.workspacePath || i.cwd) === filterWorkspace);
+          }
 
-        return groupOrder.map((key) => groups.get(key)).filter(Boolean);
-      }, [items, searchQuery, filterWorkspace, sortOrder, ctx]);
+          // 按工作区分组（保持服务端返回的工作区顺序，与左侧 sidebar 一致）
+          const groups = new Map();
+          const groupOrder = [];
+          for (const item of list) {
+            if (!item) continue;
+            const key = item.workspacePath || item.cwd || t('otherWorkspaces');
+            const title = localizeServerFallback(item.workspaceTitle) || (item.cwd ? item.cwd.split('/').pop() : t('unnamedProject'));
+            if (!groups.has(key)) {
+              groups.set(key, { path: key, title, items: [] });
+              groupOrder.push(key);
+            }
+            groups.get(key).items.push(item);
+          }
+
+          // 每个工作区内部按时间排序，不影响工作区之间的顺序
+          for (const group of groups.values()) {
+            group.items.sort((a, b) => {
+              const timeA = a.archivedAt || 0;
+              const timeB = b.archivedAt || 0;
+              return sortOrder === 'asc' ? timeA - timeB : timeB - timeA;
+            });
+          }
+
+          return groupOrder.map((key) => groups.get(key)).filter(Boolean);
+        } catch (err) {
+          console.error('session-trash: groupedWorkspaces error:', err);
+          return [];
+        }
+      }, [items, searchQuery, filterWorkspace, sortOrder]);
 
       return h('div', { className: 'dsh-trash-container' },
         // Header
