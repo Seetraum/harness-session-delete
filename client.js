@@ -1028,7 +1028,17 @@ window.__ModuleLoader__.load({
                   // Session Cards List
                   h('div', { className: 'dsh-trash-cards' },
                     group.items.map((item) => {
-                      const displayTitle = currentTitle(item.sessionId, localizeServerFallback(item.title)) || item.sessionId;
+                      // Defensive: ensure displayTitle is always a string.
+                      // The host may return an object/array for `title` (e.g. {} for empty sessions),
+                      // and React 18 throws "Objects are not valid as a React child" when an object
+                      // is passed as a child, which crashes the entire TrashTab subtree and renders
+                      // a blank Settings panel. Coerce non-string values to a safe string here.
+                      const rawDisplayTitle = currentTitle(item.sessionId, localizeServerFallback(item.title));
+                      const displayTitle = (() => {
+                        if (typeof rawDisplayTitle === 'string') return rawDisplayTitle;
+                        if (typeof rawDisplayTitle === 'number') return String(rawDisplayTitle);
+                        return item.sessionId;
+                      })();
                       const path = item.cwd || item.workspacePath || '-';
                       const isChecked = selectedSessionIds.has(item.sessionId);
 
