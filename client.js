@@ -1540,12 +1540,13 @@ window.__ModuleLoader__.load({
       // 约等于视口 < 800px）就整项消失，这正是「设置里没有会话回收站」的真正原因。
       // 25 落在 20（mnemon「Memory System」）与 30（cost-meter「Cost」）之间，
       // 属于最上面几项，任何能看见设置导航的窗口都能看见它。
+      // 修改为 order: 5，确保在任何窗口高度下都可见
       ctx.slots.inject('settings.section', () =>
         ctx.slots.register(
           {
             name: 'settings.section',
             id: 'trash',
-            order: 25,
+            order: 5,
             label: () => t('recycleBin'),
           },
           (props) => TrashTab({ ...props, ctx })
