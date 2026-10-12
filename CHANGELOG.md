@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.4.4] - 2026-10-12
+
+### Performance
+
+- **The recycle bin no longer reads a session log to build its list.** Every row used to decode its whole Zstd frame chain just to count turns and derive a title — 10-198 ms per session, on every request, on the web server's own thread. Titles and turn counts now come from the Session projection cache, the same zero-I/O face DSH's own session list uses; `fileSize` uses the listing snapshot's `sizeBytes` instead of a per-session `stat()`, and `archivedAt` is the real archive time rather than the log's mtime (which is last *activity*, so the "最近删除" sort was wrong too).
+
+### Fixed
+
+- **The patched archive methods replaced the registry's own and misread its signature.** DSH passes an options object (`{}` / `{ stopActivity: true }`) where the plugin expected a title string, so `{}` was stored as a title and the panel then rendered that object as a React child, which throws; replacing the methods also dropped four invariants — the session-existence check, the activity gate, the `stopActivity` hand-off and the pin drop. They now delegate and only layer display metadata on top, and refusals map to proper HTTP errors instead of a 500. Unarchiving no longer leaves the stored title behind either.
+- **A checkpoint from an older Session format generation blanked the title.** `cachedSnapshot` only accepts the host's current generation, and the reference store's 3 → 4 migration left 481 of its 524 records older — ~99% would have been rejected. The list now falls back to `cachedPredecessorTitle`, and a turn count the cache cannot serve is reported as `null`, never `0`.
+
+### Changed
+
+- **The sidebar session row no longer carries a second delete hover button.** DSH 0.2 ships its own archive button on every row; the plugin's trash icon sat beside it doing the same thing under a different verb. Both it and the document-wide MutationObserver that drove it are gone. Destructive verbs stay in the 会话回收站 panel.
+- The conversation-header action now reads 移入回收站 / Move to Recycle Bin instead of 删除会话 / Delete Session: it archives reversibly and never deleted anything.
+- **The toast and the header tooltip now match the host's own** — top-centre banner (dark in both themes, 6000 ms hold, click-through) and a themed tooltip instead of the OS-drawn `title`. Both specs are ported rather than imported: `@deepseek-ai/dsh-client-ui-primitives` is inlined by Vite and cannot be required from a hand-written bundle.
+- Declared the host floor `dsh.engines.dsh = ">=0.2.0-rc.2"` — tested on 0.2.0-rc.2, older hosts untested. DSH does not read this field; it documents the requirement for users and marketplaces.
+
 ## [0.4.3] - 2026-09-18
 
 ### Fixed

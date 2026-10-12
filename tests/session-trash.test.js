@@ -4,10 +4,22 @@ import { mkdir, writeFile, stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SessionTrashHost } from '../packages/session-trash-host/lib/index.js';
 
+/** Minimal Node response recorder for driving one registered route handler. */
+function makeRes() {
+  return {
+    statusCode: 0,
+    headers: null,
+    body: '',
+    writeHead(status, headers) { this.statusCode = status; this.headers = headers; },
+    end(chunk) { this.body = chunk ?? ''; },
+  };
+}
+
 describe('Session Trash Host Plugin Test Suite', () => {
   let mockCtx;
   let mockPersistence;
   let mockCache;
+  let projectionRows;
   let mockRegistry;
   let mockTypert;
   let mockSessions;
@@ -36,9 +48,19 @@ describe('Session Trash Host Plugin Test Suite', () => {
         if (id === 'error-id') throw new Error('DB Table error');
       },
     };
+    // The listing facts the recycle bin now reads with zero log I/O: the same
+    // `cachedSnapshot(header, keys)` face DSH's own session list uses. The real
+    // cache validates the header against the stored lifecycle identity; this
+    // fake keys on the header id and answers only for rows a test seeds.
+    projectionRows = new Map();
     mockCache = {
       requireTable: () => mockTable,
       markClean: (id) => {},
+      cachedSnapshot: (header) => {
+        const row = projectionRows.get(header?.id);
+        if (!row) return undefined;
+        return { asOfSeq: 1, values: { title: row.title, sessionStats: { turns: row.turns } } };
+      },
     };
 
     mockState = {
@@ -181,44 +203,31 @@ describe('Session Trash Host Plugin Test Suite', () => {
     assert.strictEqual(items[1].workspacePath, undefined);
   });
 
-  test('8. Dual-cohort: 0.1.5-shape persistence (snapshot list + open/read handle) works', async () => {
+  test('8. Dual-cohort: 0.1.5-shape persistence (snapshot list) works', async () => {
     // Simulate DSH 0.1.5-rc.1: list() returns SessionPersistenceSnapshot[]
-    // ({ header, ... }), inspect() is REMOVED, findLog is not on the service,
-    // locate() still computes a candidate path, and events come from
-    // open(id) -> handle.read() -> { events }.
+    // ({ header, sizeBytes, ... }) instead of bare SessionHeader[]. That shape
+    // is now the ONLY cohort difference the list depends on — it resolves the
+    // header (lifecycle witness) and the free sizeBytes from it.
     const sessDir = join(tempDir, 'sess-v3');
     await mkdir(sessDir, { recursive: true });
     const logPath = join(sessDir, 'session.v3.jsonl');
 
-    const events = [
-      { type: 'session/start', createdAt: 100 },
-      { type: 'user/message', createdAt: 110, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '你好，帮我重构' }] } },
-      { type: 'turn/start', createdAt: 120 },
-      { type: 'assistant/message', createdAt: 130, data: { message: { content: [{ type: 'text', text: '好的' }] } } },
-      { type: 'turn/start', createdAt: 140 },
-    ];
-    await writeFile(logPath, JSON.stringify(events[0]) + '\n', 'utf8'); // physical log exists (locate candidate valid)
+    // The physical log only has to EXIST: the list no longer reads it, and
+    // permanentlyDeleteSession resolves and removes it by path.
+    await writeFile(logPath, JSON.stringify({ type: 'session/start', createdAt: 100 }) + '\n', 'utf8');
 
     const bShapePersistence = {
-      // 0.1.5: list returns snapshots wrapping the header.
+      // 0.1.5: list returns snapshots wrapping the header, and sizeBytes is a
+      // free field of that snapshot — the panel shows it without stat()ing.
       list: async () => [
-        { header: { id: 'sess-v3', title: 'V3 Session', cwd: '/work/proj3' }, revision: 1, eventCount: 5 },
+        { header: { id: 'sess-v3', title: 'V3 Session', cwd: '/work/proj3' }, revision: 1, eventCount: 5, sizeBytes: 4096 },
         { header: { id: 'sess-2', title: 'Session 2', cwd: '/work/proj2' }, revision: 1 },
       ],
       // 0.1.5: no inspect, no service-level findLog; locate still computes a path.
+      // No `open` either: since v0.4.4 the LIST never reads a log, so the
+      // handle API is no longer part of this path. Its read-access contract is
+      // covered where it now lives — the preview route (test 10).
       locate: (meta) => ({ kind: 'jsonl', path: join(tempDir, meta.id, 'session.v3.jsonl') }),
-      // 0.1.5: handle-based reads. The access argument is part of the
-      // contract — the real backend treats anything but 'read' as a
-      // single-writer claim.
-      open: async (id, access) => {
-        assert.strictEqual(id, 'sess-v3');
-        assert.strictEqual(access, 'read', 'reads must open with read access');
-        return {
-          id,
-          read: async () => ({ eventState: 'exclusive', events }),
-          close: async () => {},
-        };
-      },
     };
 
     // Reuse the plugin's own patching through a fresh host instance.
@@ -231,14 +240,16 @@ describe('Session Trash Host Plugin Test Suite', () => {
     const initSymbol = Symbol.for('cordis.init');
     await bPlugin[initSymbol]();
 
-    // listArchivedSessions: snapshot headers normalized + events read via open/read.
+    // listArchivedSessions: snapshot headers normalized, and every listing
+    // fact served from state + the projection cache — the log is not touched.
+    projectionRows.set('sess-v3', { turns: 2 });
     mockState.archivedSessionIds = ['sess-v3', 'sess-2'];
     const items = await mockCtx.workspaceRegistry.listArchivedSessions();
     const v3 = items.find((i) => i.sessionId === 'sess-v3');
     assert.ok(v3, 'sess-v3 listed');
-    assert.strictEqual(v3.title, 'V3 Session', 'title from normalized snapshot header');
-    assert.strictEqual(v3.turnCount, 2, 'turnCount from handle.read() events');
-    assert.ok(v3.fileSize > 0, 'fileSize from locate-resolved physical file');
+    assert.strictEqual(v3.title, 'V3 Session', 'title from the normalized snapshot header');
+    assert.strictEqual(v3.turnCount, 2, 'turnCount from the projection cache');
+    assert.strictEqual(v3.fileSize, 4096, 'fileSize from the listing snapshot sizeBytes (no stat)');
 
     // permanentlyDeleteSession: locate resolves the existing log -> workspace slot kept.
     mockState.archivedSessionIds = ['sess-v3'];
@@ -286,15 +297,18 @@ describe('Session Trash Host Plugin Test Suite', () => {
     assert.strictEqual(stillThere, false, 'physical session dir deleted via the descriptor path');
   });
 
-  test('10. Regression: reading a session the host still owns must not zero the turn count', async () => {
+  test('10. Regression: the list opens no log, the preview opens with read access', async () => {
     // Real 0.1.5 backend contract (lib/index.js of
     // @deepseek-ai/dsh-session-persistence-jsonl): open(id, access) branches on
     // `access === 'read'`; anything else — including a missing argument — takes
     // the single-writer path (tracker.claimWrite + an exclusive lease) and
     // throws SessionAlreadyOwnedError when the host still holds the session
-    // open. A trashed conversation is usually still loaded, so `open(id)` made
-    // BOTH the recycle-bin turn count and the preview read empty; the plugin
-    // swallowed the error. This mock reproduces that backend semantics.
+    // open. A trashed conversation is usually still loaded.
+    //
+    // Since v0.4.4 the LIST reads no log at all, so that contract can no longer
+    // zero a turn count. This test pins BOTH halves: the list must open
+    // nothing, and the preview — the one remaining log reader — must still ask
+    // for read access. This mock reproduces the backend semantics.
     const events = [
       { type: 'session/start', createdAt: 1 },
       { type: 'user/message', createdAt: 2, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '真实用户提问' }] } },
@@ -304,9 +318,11 @@ describe('Session Trash Host Plugin Test Suite', () => {
     ];
     const openCalls = [];
     const ownershipPersistence = {
-      // Header title falls back to the id (never-titled session) so the row
-      // exercises the derived-title path built from the stored events.
-      list: async () => [{ header: { id: 'sess-owned', title: 'sess-owned', cwd: '/work/proj10' }, revision: 1 }],
+      list: async () => [{
+        header: { id: 'sess-owned', version: 3, createdAt: 7, cwd: '/work/proj10', isSeeded: false },
+        revision: 1,
+        sizeBytes: 512,
+      }],
       locate: () => ({ kind: 'jsonl', path: join(tempDir, 'sess-owned', 'session.v3.jsonl') }),
       // Semantics of the real backend while the host holds the write handle.
       open: async (id, access) => {
@@ -323,18 +339,155 @@ describe('Session Trash Host Plugin Test Suite', () => {
     const entities = new Map([
       ['ws-10', { record: { path: '/work/proj10', title: 'Proj 10', sessionIds: ['sess-owned'] }, detachSession: async () => {} }],
     ]);
-    const ownedCtx = { ...mockCtx, sessionPersistence: ownershipPersistence };
+    const routeTable = new Map();
+    const ownedCtx = {
+      ...mockCtx,
+      sessionPersistence: ownershipPersistence,
+      webServer: {
+        register(route) {
+          routeTable.set(route.path, route);
+          return () => routeTable.delete(route.path);
+        },
+      },
+    };
     mockCtx.workspaceRegistry.entities = entities;
     const ownedPlugin = new SessionTrashHost(ownedCtx);
     await ownedPlugin[Symbol.for('cordis.init')]();
 
+    // The list: zero log I/O — turns from the projection cache, size from the
+    // listing snapshot's own sizeBytes.
+    projectionRows.set('sess-owned', { turns: 2 });
     mockState.archivedSessionIds = ['sess-owned'];
     const items = await mockCtx.workspaceRegistry.listArchivedSessions();
     const owned = items.find((i) => i.sessionId === 'sess-owned');
 
     assert.ok(owned, 'host-owned session still listed');
-    assert.deepStrictEqual(openCalls, ['read'], 'every read must ask for read access');
+    assert.deepStrictEqual(openCalls, [], 'the recycle-bin list must not open any session log');
     assert.strictEqual(owned.turnCount, 2, 'turn count survives a host-owned session');
-    assert.strictEqual(owned.title, '真实用户提问', 'derived title survives a host-owned session');
+    assert.strictEqual(owned.fileSize, 512, 'fileSize from the listing snapshot, not a stat');
+    // A session whose header title is just its id and whose title projection is
+    // absent renders the placeholder. v0.3 derived this from the first user
+    // message, which is what forced the whole-log read; the measured corpus
+    // carries a title row for 521/524 sessions, so this is the rare case.
+    assert.strictEqual(owned.title, '未命名会话', 'untitled session renders the placeholder');
+
+    // The preview is the remaining log reader, and where the access contract
+    // now lives.
+    const messagesRoute = routeTable.get('/api/session-trash/messages');
+    assert.ok(messagesRoute, 'preview route registered');
+    const res = makeRes();
+    await messagesRoute.handler(
+      { method: 'GET', url: '/api/session-trash/messages?sessionId=sess-owned', headers: {} },
+      res,
+    );
+    assert.strictEqual(res.statusCode, 200, 'preview responds 200');
+    assert.deepStrictEqual(openCalls, ['read'], 'the preview must open with read access');
+    const payload = JSON.parse(res.body);
+    assert.ok(Array.isArray(payload.data.messages), 'preview returns a message list');
+  });
+
+  test('11. Regression: the registry keeps its own archive API, and its options never become a title', async () => {
+    // DSH calls `WorkspaceRegistry.archiveSession(sessionId, options)` with
+    // `{ stopActivity: true }` or `{}` (api-workspace-controller), while this
+    // plugin's own /archive route passes a title STRING in the same slot.
+    // Until v0.4.4 the patch read that slot as a title, so DSH's `{}` was
+    // truthy and got stored as one — the panel then read it back as
+    // `savedTitle` and rendered an object as a React child, which throws.
+    // (The two `{...: {}}` entries still sitting in workspace.json are its
+    // residue.) The same patch REPLACED the registry method outright, dropping
+    // its session-existence check, its `workspace/session-activity` gate, its
+    // `stopActivity` hand-off and its pin drop.
+    const calls = [];
+    const delegatingRegistry = {
+      requireState: () => mockState,
+      setState: async (next) => { Object.assign(mockState, next); },
+      enqueueOperation: async (fn) => fn(),
+      entities: new Map(),
+      // The registry's own implementation, as dsh-workspace ships it.
+      archiveSession: async (sessionId, options) => {
+        calls.push(['archive', sessionId, options]);
+        mockState.archivedSessionIds = [...(mockState.archivedSessionIds ?? []), sessionId];
+      },
+      unarchiveSession: async (sessionId) => {
+        calls.push(['unarchive', sessionId]);
+        mockState.archivedSessionIds = (mockState.archivedSessionIds ?? []).filter((id) => id !== sessionId);
+      },
+    };
+    mockState.archivedSessionIds = [];
+    mockState.archivedMeta = {};
+
+    const ctx = { ...mockCtx, workspaceRegistry: delegatingRegistry };
+    const p = new SessionTrashHost(ctx);
+    await p[Symbol.for('cordis.init')]();
+
+    // DSH's own path: an options object, no title.
+    await delegatingRegistry.archiveSession('sess-1', {});
+    assert.deepStrictEqual(calls, [['archive', 'sess-1', {}]], 'the registry method must receive the options object');
+    assert.deepStrictEqual(mockState.archivedSessionIds, ['sess-1'], 'the registry write is the authoritative one');
+    assert.strictEqual(
+      mockState.archivedMeta['sess-1'].title,
+      undefined,
+      'an options object must never be stored as a title',
+    );
+    assert.ok(Number.isFinite(mockState.archivedMeta['sess-1'].at), 'the real archive time is recorded');
+
+    // The plugin's own path: a title string, forwarded as empty options.
+    mockState.archivedSessionIds = [];
+    await delegatingRegistry.archiveSession('sess-2', '我的会话');
+    assert.deepStrictEqual(calls[1], ['archive', 'sess-2', {}], 'a title string is not forwarded as options');
+    assert.strictEqual(mockState.archivedMeta['sess-2'].title, '我的会话', 'a title string is stored as-is');
+
+    // stopActivity must reach the registry untouched (the "stop and archive"
+    // confirmation depends on it).
+    mockState.archivedSessionIds = [];
+    await delegatingRegistry.archiveSession('sess-3', { stopActivity: true });
+    assert.deepStrictEqual(calls[2], ['archive', 'sess-3', { stopActivity: true }], 'stopActivity must be forwarded');
+
+    // Unarchive delegates, and drops the display facts it no longer needs.
+    await delegatingRegistry.unarchiveSession('sess-2');
+    assert.deepStrictEqual(calls[3], ['unarchive', 'sess-2'], 'unarchive delegates to the registry');
+    assert.ok(!('sess-2' in mockState.archivedMeta), 'unarchive must drop the archivedMeta entry');
+  });
+
+  test('12. A checkpoint from an older Session format generation still yields its title', async () => {
+    // Regression found against the real 0.2.0-rc.2 store: a projection-cache
+    // checkpoint is bound to the format generation that folded it, and
+    // `cachedSnapshot` accepts only the host's CURRENT generation
+    // (currentLifecycleMatches: stored formatVersion === header.version). The
+    // reference store had moved 3 -> 4 while 481 of its 524 cache records were
+    // still v3 and 39 carried no generation at all — so reading that face
+    // alone rejected ~99% of the corpus and blanked nearly every title.
+    // `cachedPredecessorTitle` is the face DSH ships for that upgrade window.
+    mockCache = {
+      requireTable: () => mockTable,
+      markClean: () => {},
+      // Current generation: nothing (the record predates the upgrade).
+      cachedSnapshot: () => undefined,
+      // Predecessor generation: the title is still legitimate.
+      cachedPredecessorTitle: (header) => (header?.id === 'sess-legacy'
+        ? { asOfSeq: 12, values: { title: '升级前的会话' } }
+        : undefined),
+    };
+    mockPersistence.list = async () => [{
+      header: { id: 'sess-legacy', version: 4, createdAt: 5, cwd: '/work/legacy', isSeeded: false },
+      revision: 'rev-legacy',
+      sizeBytes: 128,
+    }];
+
+    const ctx = { ...mockCtx, sessionProjectionCache: mockCache };
+    const p = new SessionTrashHost(ctx);
+    await p[Symbol.for('cordis.init')]();
+
+    mockState.archivedSessionIds = ['sess-legacy'];
+    const items = await mockCtx.workspaceRegistry.listArchivedSessions();
+    const row = items.find((i) => i.sessionId === 'sess-legacy');
+
+    assert.ok(row, 'pre-upgrade session still listed');
+    assert.strictEqual(row.title, '升级前的会话', 'a predecessor-generation title is served');
+    // A predecessor checkpoint deliberately exposes the title only, so the
+    // turn count is UNKNOWN. It must be null, never 0: the panel omits the
+    // chip rather than claiming a long session had no turns.
+    assert.strictEqual(row.turnCount, null, 'an unreadable turn count is null, not 0');
+    assert.strictEqual(row.fileSize, 128, 'sizeBytes still comes from the listing');
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Client-half regression: the session-header "删除会话" action must resolve the
+ * Client-half regression: the session-header "移入回收站" action must resolve the
  * active session and reach POST /archive on BOTH host cohorts.
  *
  * Background (found on DSH 0.1.5-rc.1): the header button rendered but clicking
@@ -24,7 +24,14 @@ const CURRENT = 'sess-current-1';
 
 function makeEl(tag = 'div') {
   const el = {
-    tagName: String(tag).toUpperCase(), children: [], style: {}, dataset: {}, attributes: {},
+    tagName: String(tag).toUpperCase(), children: [], dataset: {}, attributes: {},
+    // The toast publishes its hold as a custom property, so the stub needs the
+    // CSSOM setters — plain assignment is not enough.
+    style: {
+      setProperty(name, value) { this[name] = value; },
+      removeProperty(name) { delete this[name]; },
+      getPropertyValue(name) { return this[name] ?? ''; },
+    },
     className: '', textContent: '', nodeType: 1, parentNode: null,
     appendChild(c) { c.parentNode = this; this.children.push(c); return c; },
     removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); return c; },
@@ -136,8 +143,14 @@ async function clickHeaderAction(props) {
   const Component = registrations['conversation.session.header.actions'];
   assert.equal(typeof Component, 'function', 'header action must register');
   const element = Component({ ...props, ctx });
-  assert.equal(typeof element.props.onClick, 'function', 'button must have a click handler');
-  await element.props.onClick({ stopPropagation() {} });
+  // The action renders a Fragment: [button, tooltip?]. Both shapes are
+  // accepted so this helper keeps working either way.
+  const button = element.type === 'button'
+    ? element
+    : (Array.isArray(element.children) ? element.children : []).find((child) => child && child.type === 'button');
+  assert.ok(button, 'the action must render a button');
+  assert.equal(typeof button.props.onClick, 'function', 'button must have a click handler');
+  await button.props.onClick({ stopPropagation() {} });
   await new Promise((r) => setTimeout(r, 50));
   return calls.find((c) => c.url.includes('/archive'));
 }
@@ -156,6 +169,25 @@ describe('client header action (dual cohort)', () => {
     const call = await clickHeaderAction({ sessionId: CURRENT });
     assert.ok(call, 'POST /archive must be issued');
     assert.equal(call.body.sessionId, CURRENT);
+  });
+
+  test('the header action carries a themed tooltip, not the native title attribute', () => {
+    const { registrations, ctx } = loadClient();
+    const Component = registrations['conversation.session.header.actions'];
+    const element = Component({ sessionId: CURRENT, ctx });
+    const button = (Array.isArray(element.children) ? element.children : [])
+      .find((child) => child && child.type === 'button');
+    assert.ok(button, 'the action must render a button');
+    // An OS-drawn `title` bubble cannot follow the palette or the
+    // reduced-motion setting, and next to the host's own themed tooltips it
+    // was the one visibly unstyled control. The themed bubble replaces it and
+    // the accessible name moves to aria-label.
+    assert.equal(button.props.title, undefined, 'the native title attribute must be gone');
+    assert.equal(typeof button.props['aria-label'], 'string', 'aria-label keeps the accessible name');
+    assert.equal(typeof button.props.onMouseEnter, 'function', 'hover must open the themed tooltip');
+    assert.equal(typeof button.props.onMouseLeave, 'function', 'leaving must close it');
+    assert.equal(typeof button.props.onFocus, 'function', 'keyboard focus must open it');
+    assert.equal(typeof button.props.onBlur, 'function', 'blur must close it');
   });
 
   test('client bundle declares no module-level call to a component-scoped helper', () => {
@@ -194,7 +226,11 @@ describe('client header action (dual cohort)', () => {
   test('Chinese browser locales preserve the original labels', () => {
     const { registrationOptions } = loadClient('zh-CN');
     assert.equal(registrationOptions['settings.section'].label(), '会话回收站');
-    assert.equal(registrationOptions['conversation.session.header.actions'].label(), '删除会话');
+    // The header action names what the click does: it archives to the recycle
+    // bin (reversible, undoable), it does not delete. v0.4.4 aligned the label
+    // with the button's own tooltip and with the panel's verb — it used to read
+    // "删除会话" while the tooltip said "移入回收站".
+    assert.equal(registrationOptions['conversation.session.header.actions'].label(), '移入回收站');
   });
 
   test('the host Language setting wins over the browser (and registers our dictionaries)', () => {
@@ -204,7 +240,7 @@ describe('client header action (dual cohort)', () => {
     const service = makeLocaleService('zh');
     const { registrationOptions } = loadClient('en-US', { locale: service });
     assert.equal(registrationOptions['settings.section'].label(), '会话回收站');
-    assert.equal(registrationOptions['conversation.session.header.actions'].label(), '删除会话');
+    assert.equal(registrationOptions['conversation.session.header.actions'].label(), '移入回收站');
     assert.equal(service.registered.length, 1, 'dictionaries are published to the locale service');
     assert.equal(service.registered[0].ns, 'session-trash');
     assert.ok(service.registered[0].table.zh && service.registered[0].table.en, 'both locales are published');

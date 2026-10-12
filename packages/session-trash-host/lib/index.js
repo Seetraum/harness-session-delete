@@ -69,6 +69,104 @@ function normalizeStoredHeader(item) {
 }
 
 /**
+ * Normalize one persistence.list() item to `{ header, sizeBytes }` across
+ * cohorts. `sizeBytes` is a free field of the 0.1.5+ listing snapshot;
+ * normalizeStoredHeader unwrapped it away, which is why the recycle bin used
+ * to `stat()` every log just to recover a number the header listing already
+ * carried.
+ * @param {object|undefined} item
+ * @returns {{header: object, sizeBytes: number|undefined}|undefined}
+ */
+function normalizeStoredSnapshot(item) {
+  if (!item) return undefined;
+  if (item.header && typeof item.header.id === 'string') {
+    const size = item.sizeBytes;
+    return { header: item.header, sizeBytes: typeof size === 'number' ? size : undefined };
+  }
+  if (typeof item.id === 'string') return { header: item, sizeBytes: undefined };
+  return undefined;
+}
+
+/**
+ * Read the listing facts the recycle bin needs straight out of the Session
+ * projection cache — DSH's documented ZERO-I/O listing read
+ * (`SessionProjectionCache.cachedSnapshot`, "the zero-I/O listing read").
+ * The stock session list (`api-session-controller.projectionsFor`) reads the
+ * same faces; this is not a private API.
+ *
+ * WHY THIS REPLACES THE LOG READ (v0.4.4):
+ *
+ * Until v0.4.3 the list derived `turnCount` and a fallback title by opening
+ * every archived session's log and decoding its whole JSONL/Zstd frame
+ * chain (`readSessionEvents`). Measured on the reference store (569 MB, 474
+ * sessions, p50 416 KB compressed, max 30 MB): a 6.7 MB log (3728 frames,
+ * 21.4 MB plaintext, 6493 events) cost ~198 ms of decompress+parse, and the
+ * median band 10-19 ms — per session, per request, on the web server's own
+ * thread. Decoding the first frame alone (the header) measured ~1 ms, which
+ * is what the stock listing pays.
+ *
+ * The header carries NO title — SessionHeader has had no `title` field since
+ * 0.2 — so the projection cache is also the only correct title source: the
+ * same `title` unit DSH renders in the sidebar.
+ *
+ * TWO FACES, AND WHY BOTH ARE NEEDED:
+ *
+ * A checkpoint is bound to the Session FORMAT GENERATION that folded it.
+ * `cachedSnapshot` accepts only a record at the host's CURRENT generation
+ * (`currentLifecycleMatches`: stored formatVersion === header.version), while
+ * `cachedPredecessorTitle` accepts a strictly older one. That is not
+ * academic: on the reference store the host moved from format 3 to 4 and the
+ * cache still held 481 v3 records plus 39 with no generation, against only 4
+ * v4 ones. Reading `cachedSnapshot` alone would have rejected ~99% of the
+ * corpus and silently blanked nearly every title. The predecessor face is
+ * the one DSH ships for exactly this upgrade window.
+ *
+ * It exposes the TITLE ONLY, by design — "format normalization can change
+ * their current meaning" is the cache's own note about other predecessor
+ * projections — so a pre-upgrade `turns` count is deliberately NOT readable.
+ * A missing `turns` therefore means UNKNOWN, never zero: callers must not
+ * render it as 0.
+ *
+ * @param {object|undefined} cache ctx.sessionProjectionCache
+ * @param {object} header stored SessionHeader (the lifecycle identity witness)
+ * @returns {{title: string|undefined, turns: number|undefined}}
+ */
+function readCachedSessionFacts(cache, header) {
+  const facts = { title: undefined, turns: undefined };
+  if (!header || !cache) return facts;
+
+  /** Fold one viewed block in, never overwriting an already-known fact. */
+  const take = (block) => {
+    const values = block?.values;
+    if (!values || typeof values !== 'object') return;
+    if (facts.title === undefined) {
+      const title = values.title;
+      if (typeof title === 'string' && title.length > 0) facts.title = title;
+    }
+    if (facts.turns === undefined) {
+      const turns = values.sessionStats?.turns;
+      if (typeof turns === 'number' && Number.isFinite(turns)) facts.turns = turns;
+    }
+  };
+
+  try {
+    if (typeof cache.cachedSnapshot === 'function') {
+      take(cache.cachedSnapshot(header, ['title', 'sessionStats']));
+    }
+  } catch {
+    // A cache miss or contract drift must never fail the list.
+  }
+  try {
+    if (typeof cache.cachedPredecessorTitle === 'function') {
+      take(cache.cachedPredecessorTitle(header));
+    }
+  } catch {
+    // Same: the row renders without the cached facts.
+  }
+  return facts;
+}
+
+/**
  * Resolve one session's physical log path across host cohorts.
  *
  * Priority:
@@ -370,6 +468,13 @@ function patchWorkspaceRegistry(registry, ctx) {
   // zero the turn counts. ctx.get(...) is a safe non-throwing accessor, so
   // the remaining per-call lookups below stay dynamic on purpose.
   const persistence = ctx.sessionPersistence;
+  // Snapshotted exactly like persistence, and for the same reason: these
+  // methods live on the SHARED registry and can outlive this fiber, so a
+  // call-time `ctx.get('sessionProjectionCache')` would degrade to
+  // `undefined` on a dead context and silently zero every turn count — the
+  // v0.3.2 production symptom, just moved into the projection read. The
+  // service is in `static inject`, so it is present while this runs.
+  const projectionCache = ctx.get('sessionProjectionCache');
   const runInQueue = (fn) => {
     if (typeof registry.enqueueOperation === 'function') {
       return registry.enqueueOperation(fn);
@@ -377,41 +482,113 @@ function patchWorkspaceRegistry(registry, ctx) {
     return fn();
   };
 
+  // The registry's OWN methods, captured before this patch replaces them.
+  // Unwrapping TRASH_PATCH_ORIGINAL matters on an in-process re-mount
+  // (loader update, uninstall → install): the registry is shared, so the
+  // previous install's patch would otherwise be read back as "the original"
+  // and the patch would recurse into itself forever.
+  const currentArchive = registry.archiveSession;
+  const currentUnarchive = registry.unarchiveSession;
+  const originalArchive = currentArchive?.[TRASH_PATCH_ORIGINAL] ?? currentArchive;
+  const originalUnarchive = currentUnarchive?.[TRASH_PATCH_ORIGINAL] ?? currentUnarchive;
+
   // ── archiveSession ────────────────────────────────────────────────
-  registry.archiveSession = function archiveSession(sessionId, title) {
-    return runInQueue(async () => {
-      const state = registry.requireState?.();
-      if (!state) return;
-      const currentArchived = state.archivedSessionIds ?? [];
-      const currentTitles = state.archivedTitles ?? {};
-      if (!currentArchived.includes(sessionId)) {
-        const newArchived = [...currentArchived, sessionId];
-        const newTitles = { ...currentTitles };
-        if (title) newTitles[sessionId] = title;
-        await registry.setState({
-          ...state,
-          archivedSessionIds: newArchived,
-          archivedTitles: newTitles,
-        });
-        notifyArchivedSessionsChanged(ctx, newArchived);
-      }
-    });
+  //
+  // TWO CALLERS, ONE ARGUMENT SLOT (v0.4.4):
+  //
+  // DSH calls `WorkspaceRegistry.archiveSession(sessionId, options)` — its
+  // api-workspace-controller passes `{ stopActivity: true }` or `{}`. This
+  // plugin's own /archive route passes a display TITLE string instead. The
+  // pre-0.4.4 patch treated the second argument as a title, so DSH's `{}`
+  // was truthy and got stored as one: the recycle bin then read that object
+  // back as `savedTitle`, and rendering an object as a React child throws.
+  // Any session archived from DSH's own hover button therefore broke the
+  // panel, and the `{}` entries still sit in workspace.json. Split the two
+  // shapes explicitly and never store a non-string.
+  //
+  // The pre-0.4.4 patch also REPLACED the registry method outright, silently
+  // dropping four invariants DSH maintains there: the session-existence
+  // check, the `workspace/session-activity` gate that refuses to archive a
+  // session that is still working, `stopActivity` itself (so the "stop and
+  // archive" confirmation stopped nothing), and the pin drop that keeps
+  // pinning and archival mutually exclusive. Delegate to the registry's own
+  // method and layer only the display facts on top.
+  const parseArchiveArgs = (options) => {
+    if (typeof options === 'string') return { title: options || undefined, dshOptions: {} };
+    if (options && typeof options === 'object') return { title: undefined, dshOptions: options };
+    return { title: undefined, dshOptions: {} };
+  };
+
+  /**
+   * Pre-0.2 cohorts ship no registry archive API at all — this plugin is what
+   * provides one there. The write mirrors the durable shape of
+   * WorkspaceRegistry.archiveSession (archive set + dropped pin) minus the
+   * activity gate those cohorts do not expose.
+   */
+  const archiveWithoutRegistryApi = (sessionId) => runInQueue(async () => {
+    const state = registry.requireState?.();
+    if (!state) return;
+    const currentArchived = state.archivedSessionIds ?? [];
+    if (currentArchived.includes(sessionId)) return;
+    const next = { ...state, archivedSessionIds: [...currentArchived, sessionId] };
+    if (Array.isArray(state.pinnedSessionIds)) {
+      next.pinnedSessionIds = state.pinnedSessionIds.filter((id) => id !== sessionId);
+    }
+    await registry.setState(next);
+    notifyArchivedSessionsChanged(ctx, next.archivedSessionIds);
+  });
+
+  /** Persist the recycle bin's display facts for one archived session. */
+  const writeArchivedMeta = (sessionId, title) => runInQueue(async () => {
+    const state = registry.requireState?.();
+    if (!state) return;
+    if (!(state.archivedSessionIds ?? []).includes(sessionId)) return;
+    const current = state.archivedMeta ?? {};
+    const previous = current[sessionId];
+    const resolved = title ?? (typeof previous?.title === 'string' ? previous.title : undefined);
+    const at = typeof previous?.at === 'number' ? previous.at : Date.now();
+    const next = { ...current, [sessionId]: resolved === undefined ? { at } : { at, title: resolved } };
+    await registry.setState({ ...state, archivedMeta: next });
+    notifyArchivedSessionsChanged(ctx, state.archivedSessionIds);
+  });
+
+  /** Drop one archived session's display facts (unarchive or purge). */
+  const dropArchivedMeta = (sessionId) => runInQueue(async () => {
+    const state = registry.requireState?.();
+    if (!state) return;
+    const current = state.archivedMeta ?? {};
+    if (!(sessionId in current)) return;
+    const next = { ...current };
+    delete next[sessionId];
+    await registry.setState({ ...state, archivedMeta: next });
+    notifyArchivedSessionsChanged(ctx, state.archivedSessionIds ?? []);
+  });
+
+  registry.archiveSession = function archiveSession(sessionId, options) {
+    const { title, dshOptions } = parseArchiveArgs(options);
+    // The registry's own method opens its own mutation-queue slot, so this
+    // call must stay OUTSIDE runInQueue: enqueueOperation chains on the
+    // current tail, and wrapping a queued call in another queued call
+    // deadlocks the registry.
+    const archive = typeof originalArchive === 'function'
+      ? originalArchive.call(registry, sessionId, dshOptions)
+      : archiveWithoutRegistryApi(sessionId);
+    return archive.then(() => writeArchivedMeta(sessionId, title));
   };
 
   // ── unarchiveSession ──────────────────────────────────────────────
   registry.unarchiveSession = function unarchiveSession(sessionId) {
-    return runInQueue(async () => {
-      const state = registry.requireState?.();
-      if (!state || !state.archivedSessionIds.includes(sessionId)) return;
-
-      const newArchived = state.archivedSessionIds.filter((id) => id !== sessionId);
-      await registry.setState({
-        ...state,
-        archivedSessionIds: newArchived,
+    const unarchive = typeof originalUnarchive === 'function'
+      ? originalUnarchive.call(registry, sessionId)
+      : runInQueue(async () => {
+        const state = registry.requireState?.();
+        if (!state || !(state.archivedSessionIds ?? []).includes(sessionId)) return;
+        const nextArchived = state.archivedSessionIds.filter((id) => id !== sessionId);
+        await registry.setState({ ...state, archivedSessionIds: nextArchived });
+        notifyArchivedSessionsChanged(ctx, nextArchived);
       });
-
-      notifyArchivedSessionsChanged(ctx, newArchived);
-    });
+    // Restoring used to leave the session's stored title behind forever.
+    return unarchive.then(() => dropArchivedMeta(sessionId));
   };
 
   // ── permanentlyDeleteSession ──────────────────────────────────────
@@ -447,7 +624,7 @@ function patchWorkspaceRegistry(registry, ctx) {
       throw new Error(`failed to delete session log for '${sessionId}'`, { cause: error });
     }
 
-    const cache = ctx.get('sessionProjectionCache');
+    const cache = projectionCache;
     if (cache && typeof cache.remove === 'function') {
       await cache.remove(sessionId);
     }
@@ -476,9 +653,15 @@ function patchWorkspaceRegistry(registry, ctx) {
       let changed = false;
       if (state.archivedSessionIds.includes(sessionId)) {
         const newArchived = state.archivedSessionIds.filter((id) => id !== sessionId);
+        // Drop the display facts in the SAME write: a purged session leaves no
+        // row to render, and its archivedMeta entry would otherwise sit in the
+        // durable record forever.
+        const nextMeta = { ...(state.archivedMeta ?? {}) };
+        delete nextMeta[sessionId];
         await registry.setState({
           ...state,
           archivedSessionIds: newArchived,
+          archivedMeta: nextMeta,
         });
         changed = true;
       }
@@ -536,6 +719,22 @@ function patchWorkspaceRegistry(registry, ctx) {
   };
 
   // ── listArchivedSessions ──────────────────────────────────────────
+  //
+  // ZERO LOG I/O (v0.4.4). Until v0.4.3 every row opened its session log and
+  // decoded the entire Zstd frame chain just to count `turn/start` events and
+  // to derive a title from the first user message. On the reference store
+  // that meant ~0.2 s of header listing plus 10-198 ms PER archived session,
+  // on the web server's own thread, on every open and on every archive /
+  // unarchive / purge broadcast. Every fact the panel shows now comes from
+  // durable state or the projection cache:
+  //
+  //   title       archivedMeta.title → projection-cache `title` → legacy
+  //               archivedTitles (string entries only) → '未命名会话'
+  //   turnCount   projection-cache `sessionStats.turns`
+  //   fileSize    the header listing's own sizeBytes
+  //   archivedAt  archivedMeta.at — the REAL archive time. The old value was
+  //               the log's mtime, i.e. last ACTIVITY, which the panel
+  //               labelled "最近删除" and sorted by.
   registry.listArchivedSessions = async function listArchivedSessions() {
     const state = registry.requireState?.();
     if (!state) return [];
@@ -543,42 +742,18 @@ function patchWorkspaceRegistry(registry, ctx) {
     const archivedIds = state.archivedSessionIds ?? [];
     if (archivedIds.length === 0) return [];
 
-    /** 提取用户消息中的真实对话内容，过滤掉系统上下文、skills 等注入内容 */
-    function extractUserText(raw) {
-      if (!raw) return '';
-      // content 是 ContentBlock[]，每个 block 有 type 和 text 字段
-      if (Array.isArray(raw)) {
-        return raw
-          .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
-          .map((part) => part.text)
-          .filter(Boolean)
-          .join('\n')
-          .trim();
-      }
-      if (typeof raw !== 'string') return '';
-      let str = raw;
-      // 提取 <USER_REQUEST> 内的内容（用户真实输入）
-      const userReqMatch = str.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/i);
-      if (userReqMatch) return userReqMatch[1].trim();
-      // 去掉已知的 XML 标签
-      str = str.replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/gi, '');
-      str = str.replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/gi, '');
-      str = str.replace(/<SKILL>[\s\S]*?<\/SKILL>/gi, '');
-      str = str.replace(/<SYSTEM_CONTEXT>[\s\S]*?<\/SYSTEM_CONTEXT>/gi, '');
-      str = str.replace(/<WORKSPACE>[\s\S]*?<\/WORKSPACE>/gi, '');
-      // 去掉所有剩余的 HTML/XML 标签
-      str = str.replace(/<[^>]+>/g, '');
-      return str.trim();
-    }
+    const archivedMeta = state.archivedMeta ?? {};
+    const legacyTitles = state.archivedTitles ?? {};
 
-    let headers = [];
+    // ONE listing for the whole set. Its snapshot also carries sizeBytes —
+    // the field the panel used to stat() every log to recover.
+    let snapshots = [];
     try {
-      headers = ((await persistence?.list?.()) ?? []).map(normalizeStoredHeader).filter(Boolean);
+      snapshots = ((await persistence?.list?.()) ?? []).map(normalizeStoredSnapshot).filter(Boolean);
     } catch {
-      // Persistence list fallback
+      // Listing failed: every row still renders from state alone.
     }
-
-    const byId = new Map(headers.map((h) => [h.id, h]));
+    const byId = new Map(snapshots.map((snapshot) => [snapshot.header.id, snapshot]));
 
     const workspaceBySession = new Map();
     const entities = registry.entities;
@@ -595,62 +770,40 @@ function patchWorkspaceRegistry(registry, ctx) {
       }
     }
 
-    const items = await Promise.all(
-      archivedIds.map(async (sessionId) => {
-        const header = byId.get(sessionId);
-        const ws = workspaceBySession.get(sessionId);
+    const items = archivedIds.map((sessionId) => {
+      const snapshot = byId.get(sessionId);
+      const header = snapshot?.header;
+      const ws = workspaceBySession.get(sessionId);
+      const meta = archivedMeta[sessionId];
+      const cached = readCachedSessionFacts(projectionCache, header);
+      // `archivedTitles` predates archivedMeta and is also where the pre-0.4.4
+      // options-object bug parked its `{}` values: only strings are titles.
+      const legacyTitle = typeof legacyTitles[sessionId] === 'string' ? legacyTitles[sessionId] : undefined;
 
-        let archivedAt = Date.now();
-        let fileSize = 0;
-        let turnCount = 0;
-        let derivedTitle = '';
+      const title = meta?.title
+        || cached.title
+        || legacyTitle
+        || (header?.title && header.title !== sessionId ? header.title : undefined)
+        || '未命名会话';
 
-        try {
-          const logPath = await resolveSessionLogPath(persistence, sessionId);
-          if (logPath) {
-            const fileStat = await stat(logPath).catch(() => null);
-            if (fileStat) {
-              archivedAt = fileStat.mtimeMs;
-              fileSize = fileStat.size;
-            }
-          }
-          // 读取已解压的会话事件（DSH 默认启用 Zstd 压缩，直接 readFile 读到的是
-          // 二进制数据，无法解析为 JSON）。0.1.5 起 inspect 移除，改用
-          // open(id, 'read') → handle.read()（见 readSessionEvents）。
-          const events = await readSessionEvents(persistence, sessionId);
-          if (Array.isArray(events)) {
-            // 统计 turn/start 事件数量作为真实对话轮数
-            turnCount = events.filter((e) => e.type === 'turn/start').length;
-            // 提取第一条真实用户消息作为衍生标题（过滤掉系统上下文等非用户输入）
-            const firstUserMsg = events.find((e) => e.type === 'user/message' && e.data?.source?.kind === 'user');
-            if (firstUserMsg?.data?.content) {
-              const text = extractUserText(firstUserMsg.data.content);
-              if (text) {
-                derivedTitle = text.split('\n')[0].substring(0, 50);
-              }
-            }
-          }
-        } catch {
-          // best effort fallback
-        }
-
-        const savedTitle = state?.archivedTitles?.[sessionId];
-        const finalTitle = savedTitle || ((header?.title && header.title !== sessionId)
-          ? header.title
-          : (derivedTitle || (header?.title ? header.title : '未命名会话')));
-
-        return {
-          sessionId,
-          title: finalTitle,
-          cwd: header?.cwd,
-          workspacePath: ws?.workspacePath || ws?.cwd,
-          workspaceTitle: ws?.workspaceTitle,
-          archivedAt,
-          fileSize,
-          turnCount,
-        };
-      })
-    );
+      return {
+        sessionId,
+        title,
+        cwd: header?.cwd,
+        workspacePath: ws?.workspacePath || ws?.cwd,
+        workspaceTitle: ws?.workspaceTitle,
+        // Rows archived before archivedMeta existed fall back to the header's
+        // createdAt: stable and monotonic without touching the disk.
+        archivedAt: typeof meta?.at === 'number' ? meta.at : (header?.createdAt ?? 0),
+        fileSize: snapshot?.sizeBytes ?? 0,
+        // null, NOT 0, when the cache cannot serve a current-generation
+        // `sessionStats` row: an unknown count and a zero count are different
+        // facts, and the panel must not print "0 轮对话" over a long session
+        // whose checkpoint predates a format upgrade. The client omits the
+        // chip for null.
+        turnCount: typeof cached.turns === 'number' ? cached.turns : null,
+      };
+    });
 
     // 按工作区顺序排列（与左侧 sidebar 一致），每个工作区内按时间降序排列
     const workspaceOrder = [];
@@ -690,9 +843,18 @@ function patchWorkspaceRegistry(registry, ctx) {
     'emptyArchivedSessions',
     'listArchivedSessions',
   ];
+  // The two patched registry methods ride ON TOP of the registry's own
+  // implementations, so a later install must be able to unwrap them.
+  const ORIGINALS = {
+    archiveSession: originalArchive,
+    unarchiveSession: originalUnarchive,
+  };
   for (const name of INSTALLED) {
     if (typeof registry[name] === 'function') {
       Object.defineProperty(registry[name], TRASH_PATCH, { value: token });
+      if (typeof ORIGINALS[name] === 'function') {
+        Object.defineProperty(registry[name], TRASH_PATCH_ORIGINAL, { value: ORIGINALS[name] });
+      }
     }
   }
   return () => {
@@ -731,6 +893,31 @@ const CLIENT_CSS_PATH = fileURLToPath(new URL('../../../client.css', import.meta
 
 function httpError(statusCode, code, message) {
   return Object.assign(new Error(message), { statusCode, code });
+}
+
+/**
+ * Translate a `WorkspaceRegistry.archiveSession` refusal into an HTTP error.
+ *
+ * The registry owns two checks this plugin no longer shadows: the
+ * session-existence check and the `workspace/session-activity` gate, which
+ * refuses to archive a session that any provider still reports as working.
+ * Both are ordinary refusals, so without this mapping they would reach the
+ * browser as an opaque 500.
+ *
+ * Matching on `name` (not `instanceof`) is deliberate: the registry classes
+ * are not a dependency of this bundle, and both set `this.name` explicitly.
+ *
+ * @param {unknown} error - the thrown registry refusal.
+ * @returns {Error} an httpError, or the original error when unrecognized.
+ */
+function mapArchiveRefusal(error) {
+  if (error?.name === 'WorkspaceActiveSessionError') {
+    return httpError(409, 'SESSION_RUNNING', '会话正在运行中，请先停止后再移入回收站');
+  }
+  if (error?.name === 'WorkspaceUnknownSessionError') {
+    return httpError(404, 'UNKNOWN_SESSION', String(error?.message ?? error));
+  }
+  return error;
 }
 
 function sendJson(res, status, body) {
@@ -877,7 +1064,14 @@ function registerRoutes(ctx) {
         if (agent !== undefined && agent.status !== 'idle') {
           throw httpError(400, 'SESSION_RUNNING', '会话正在运行中，无法删除');
         }
-        await registry?.archiveSession?.(sessionId, title);
+        try {
+          // Only a string may become the durable display title: the registry
+          // itself passes an OPTIONS object in this argument slot, and storing
+          // that object is what corrupted archivedTitles before v0.4.4.
+          await registry?.archiveSession?.(sessionId, typeof title === 'string' ? title : undefined);
+        } catch (error) {
+          throw mapArchiveRefusal(error);
+        }
         ok(res, { sessionId, archivedSessionIds: broadcastArchived() });
       }),
     },

@@ -1060,94 +1060,101 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 }
 
 /* ------------------------------------------------------------------ */
-/*  Toast layer (bottom-left; show/hide animated via inline styles)    */
+/*  Toast layer — host-matched surface                                 */
 /* ------------------------------------------------------------------ */
+/*
+ * Ported from @deepseek-ai/dsh-client-ui-primitives Toast.module.css. This
+ * hand-written bundle cannot import that package: primitives declares no
+ * `dsh.client`, so Vite inlines it into each consumer and it is neither a
+ * platform seed word nor a registered module-row factory — `require()` would
+ * miss the module table. Porting the spec is the only way to match it.
+ *
+ * Two things changed beyond styling:
+ *   - Placement is TOP-CENTRE, not a bottom-right card.
+ *   - The surface is dark in BOTH themes. The old --dstrb-toast-* pair flipped
+ *     to a LIGHT panel in dark mode, i.e. the exact opposite of the host.
+ * The host tokens lead with the plugin's own as fallbacks so older cohorts,
+ * which publish no --dsw-* palette, still render a readable toast.
+ */
 
 .dsh-trash-toast-container {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
-  z-index: 10000;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Above the 1000 the image lightbox backdrop uses, as the host does. */
+  z-index: 1100;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 8px;
+  /* Announcements never intercept clicks; only the action text does. */
   pointer-events: none;
 }
 
 .dsh-trash-toast {
-  background-color: var(--dstrb-toast-bg);
-  color: var(--dstrb-toast-text);
-  padding: 10px 18px;
-  border-radius: 6px;
-  box-shadow: var(--dstrb-shadow-toast);
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 13px;
-  /* font-family comes from the "Font routing" block (it is portaled to
-     <body>, outside .dsh-trash-container, so it is routed there too). */
-  pointer-events: auto;
-  transition: all 0.2s ease;
-  opacity: 0;
-  transform: translateY(10px);
+  gap: 10px;
+  width: max-content;
+  max-width: min(640px, calc(100vw - 48px));
+  padding: 12px 16px;
+  border-radius: var(--dsw-radius-lg, 12px);
+  background: var(--dsw-alias-toast-bg, var(--dstrb-toast-bg));
+  color: var(--dsw-alias-toast-label, var(--dstrb-toast-text));
+  font-size: 14px;
+  line-height: 22px;
+  box-shadow: var(--dsw-shadow-lv3, var(--dstrb-shadow-toast));
+  pointer-events: none;
+  /* One value drives both the fade delay and the unmount timer below. */
+  animation:
+    dsh-trash-toast-in 160ms ease-out,
+    dsh-trash-toast-fade 1000ms ease var(--dsh-toast-hold, 3000ms) forwards;
+}
+
+@keyframes dsh-trash-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes dsh-trash-toast-fade {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+/* Reduced motion drops the slide-in; the delayed fade still ends the banner
+   before the timed unmount. */
+@media (prefers-reduced-motion: reduce) {
+  .dsh-trash-toast {
+    animation: dsh-trash-toast-fade 1000ms ease var(--dsh-toast-hold, 3000ms) forwards;
+  }
 }
 
 .dsh-trash-toast-undo {
-  background-color: var(--dstrb-toast-btn-bg);
-  color: var(--dstrb-toast-btn-text);
-  border: none;
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
-  margin-left: 4px;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Sidebar per-row delete button (moved out of client.js)             */
-/* ------------------------------------------------------------------ */
-
-.dsh-trash-row-btn {
+  display: inline;
+  padding: 0;
+  border: 0;
   background: none;
-  border: none;
-  padding: 2px;
-  width: 20px;
-  height: 20px;
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  /* deepseek-400 reads as the action against the always-dark surface. */
+  color: var(--dsw-static-deepseek-400, var(--dstrb-toast-btn-text));
+  font: inherit;
   cursor: pointer;
-  border-radius: 4px;
-  opacity: 0;
-  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
-  color: var(--dsw-alias-label-tertiary, var(--dstrb-text-faint));
-  margin-right: 4px;
+  margin-inline: 3px;
+  /* The banner stays click-through; only this takes the pointer. */
+  pointer-events: auto;
 }
 
-/* 占位按钮：等宽隐形，保持无法解析 ID 的会话行与其它行布局一致（防止"往左靠"） */
-.dsh-trash-row-btn--spacer {
-  pointer-events: none;
-  cursor: default;
-  opacity: 0 !important;
-}
-
-.dsh-trash-row:hover .dsh-trash-row-btn:not(.dsh-trash-row-btn--spacer),
-[role="treeitem"]:hover .dsh-trash-row-btn:not(.dsh-trash-row-btn--spacer),
-.dsh-session-item:hover .dsh-trash-row-btn:not(.dsh-trash-row-btn--spacer),
-a[href*="/session/"]:hover .dsh-trash-row-btn:not(.dsh-trash-row-btn--spacer) {
-  opacity: 0.85;
-}
-
-.dsh-trash-row-btn:not(.dsh-trash-row-btn--spacer):hover {
-  opacity: 1;
-  color: var(--dstrb-danger);
-  background: var(--dstrb-veil);
-}
-
-.dsh-trash-row-btn svg {
-  display: block;
+.dsh-trash-toast-undo:hover {
+  opacity: 0.8;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1175,4 +1182,43 @@ a[href*="/session/"]:hover .dsh-trash-row-btn:not(.dsh-trash-row-btn--spacer) {
   color: var(--dstrb-danger);
   background: var(--dstrb-veil);
   opacity: 1;
+}
+
+/* One-line label tooltip for the header action, replacing the native `title`
+   attribute: an OS-drawn bubble next to the host's themed tooltips read as
+   "unstyled plugin", and it cannot follow the palette or the motion setting.
+   Ported from @deepseek-ai/dsh-client-ui-primitives Tooltip.module.css for the
+   same reason the toast is (the package is inlined by Vite, so it cannot be
+   required from a hand-written bundle).
+   `translateX(-100%)` is the host's `side: bottom` + `align: end` transform,
+   so `left` carries the anchor's RIGHT edge. */
+.dsh-trash-tooltip-host {
+  position: fixed;
+  z-index: 100;
+  width: max-content;
+  max-width: 50vw;
+  padding: 3px 7px;
+  border-radius: var(--dsw-radius-sm, 4px);
+  background: var(--dsw-alias-tooltip-bg, var(--dstrb-tooltip-bg));
+  color: var(--dsw-static-neutral-bluish-00, var(--dstrb-tooltip-text));
+  font-size: 13px;
+  line-height: 20px;
+  white-space: pre-line;
+  /* Unbreakable tokens (paths, URLs) must not push past max-width. */
+  overflow-wrap: break-word;
+  pointer-events: none;
+  transform: translateX(-100%);
+  animation: dsh-trash-tooltip-in 150ms var(--ds-ease-in-out, ease-in-out);
+}
+
+@keyframes dsh-trash-tooltip-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dsh-trash-tooltip-host {
+    animation: none;
+  }
 }

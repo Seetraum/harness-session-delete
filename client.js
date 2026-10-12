@@ -15,6 +15,17 @@ window.__ModuleLoader__.load({
 
     const API_PREFIX = '/api/session-trash';
 
+    /**
+     * Host toast timing, mirrored so a plugin notice lives as long as a host
+     * one: `LONG_TOAST_HOLD_MS` in dsh-client-ui-workspace is 6e3 (this layer
+     * used 4000), and Toast.module.css fades over 1000ms after that hold.
+     */
+    const TOAST_HOLD_MS = 6000;
+    const TOAST_FADE_MS = 1000;
+
+    /** Host tooltip delay for an icon-only action button (dsh-client-ui-workspace). */
+    const TOOLTIP_DELAY_MS = 500;
+
     const MESSAGES = {
       en: {
         undo: 'Undo',
@@ -73,7 +84,6 @@ window.__ModuleLoader__.load({
         session: 'Session',
         moveFailed: 'Failed to move session to the recycle bin: {message}',
         moveToBin: 'Move to Recycle Bin',
-        deleteSession: 'Delete Session',
         sessionRunning: 'The session is currently running and cannot be deleted.',
       },
       zh: {
@@ -133,7 +143,6 @@ window.__ModuleLoader__.load({
         session: '会话',
         moveFailed: '移入回收站失败: {message}',
         moveToBin: '移入回收站',
-        deleteSession: '删除会话',
         sessionRunning: '会话正在运行中，无法删除',
       },
     };
@@ -341,8 +350,8 @@ window.__ModuleLoader__.load({
       (document.head ?? document.documentElement).appendChild(link);
     }
 
-    /** Show a bottom-left floating toast prompt. */
-    function showToastLayer(message, undoFn, actionText = t('undo')) {
+    /** Show a top-centre floating toast prompt, matching the host's own. */
+    function showToastLayer(message, undoFn, actionText = t('undo'), holdMs = TOAST_HOLD_MS) {
       if (typeof document === 'undefined') return;
 
       let container = document.getElementById('dsh-session-recycle-bin-toast-container');
@@ -376,16 +385,11 @@ window.__ModuleLoader__.load({
       }
 
       container.appendChild(toastEl);
-      requestAnimationFrame(() => {
-        toastEl.style.opacity = '1';
-        toastEl.style.transform = 'translateY(0)';
-      });
-
-      setTimeout(() => {
-        toastEl.style.opacity = '0';
-        toastEl.style.transform = 'translateY(10px)';
-        setTimeout(() => toastEl.remove(), 200);
-      }, 4000);
+      // One value drives BOTH the CSS fade delay and this unmount, exactly as
+      // the host's Toast does; the entry animation is CSS-only (the previous
+      // version drove opacity/transform from JS and timed out at 4000ms).
+      toastEl.style.setProperty('--dsh-toast-hold', `${holdMs}ms`);
+      setTimeout(() => toastEl.remove(), holdMs + TOAST_FADE_MS);
     }
 
     /** Formats file size in KB or MB */
@@ -1070,7 +1074,12 @@ window.__ModuleLoader__.load({
                           // Metadata Row (时间, 轮数, 容量 Badge)
                           h('div', { className: 'dsh-trash-card-meta' },
                             h('span', { className: 'dsh-trash-card-meta-item' }, formatTime(item.archivedAt)),
-                            h('span', { className: 'dsh-trash-card-meta-item' }, t('turnCount', { count: item.turnCount ?? 0 })),
+                            // 轮数只有在投影缓存能给出「当前代际」记录时才显示。
+                            // 为 null 表示未知（例如会话的检查点停留在升级前的
+                            // 格式代际），此时宁可不显示，也不能谎报 0 轮。
+                            typeof item.turnCount === 'number'
+                              ? h('span', { className: 'dsh-trash-card-meta-item' }, t('turnCount', { count: item.turnCount }))
+                              : null,
                             h('span', { className: 'dsh-trash-badge' },
                               renderDiskIcon({ className: 'dsh-trash-icon-badge' }),
                               formatFileSize(item.fileSize)
@@ -1187,6 +1196,32 @@ window.__ModuleLoader__.load({
         ctx?.sessions?.active?.getSnapshot()?.session?.id ||
         ctx?.sessions?.currentId;
 
+      // Tooltip state for this icon-only action. React clears `currentTarget`
+      // once a handler returns, so the rect is read synchronously and only the
+      // state update is delayed.
+      const [tipAt, setTipAt] = useState(null);
+      const tipTimer = React.useRef(null);
+      const showTooltip = (event) => {
+        if (tipTimer.current) clearTimeout(tipTimer.current);
+        const rect = event.currentTarget.getBoundingClientRect();
+        const at = { x: rect.right, y: rect.bottom + 6 };
+        tipTimer.current = setTimeout(() => setTipAt(at), TOOLTIP_DELAY_MS);
+      };
+      // Keyboard focus gets it immediately — a delayed bubble is useless to
+      // someone tabbing through the header.
+      const showTooltipNow = (event) => {
+        if (tipTimer.current) clearTimeout(tipTimer.current);
+        const rect = event.currentTarget.getBoundingClientRect();
+        setTipAt({ x: rect.right, y: rect.bottom + 6 });
+      };
+      const hideTooltip = () => {
+        if (tipTimer.current) clearTimeout(tipTimer.current);
+        setTipAt(null);
+      };
+      useEffect(() => () => {
+        if (tipTimer.current) clearTimeout(tipTimer.current);
+      }, []);
+
       const handleArchive = async (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
         if (!sessionId) {
@@ -1210,253 +1245,38 @@ window.__ModuleLoader__.load({
       };
 
       return h(
-        'button',
-        {
-          type: 'button',
-          className: 'dsh-trash-header-action',
-          title: t('moveToBin'),
-          onClick: handleArchive,
-        },
-        renderTrashIcon({ width: 14, height: 14 })
+        React.Fragment,
+        null,
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsh-trash-header-action',
+            // No native `title`: the themed bubble below replaces it. An
+            // OS-drawn tooltip cannot follow the palette or the reduced-motion
+            // setting, and sitting beside the host's own themed tooltips it
+            // read as an unstyled plugin. aria-label keeps the accessible name.
+            'aria-label': t('moveToBin'),
+            onMouseEnter: showTooltip,
+            onMouseLeave: hideTooltip,
+            onFocus: showTooltipNow,
+            onBlur: hideTooltip,
+            onClick: handleArchive,
+          },
+          renderTrashIcon({ width: 14, height: 14 })
+        ),
+        tipAt &&
+          h(
+            'div',
+            {
+              className: 'dsh-trash-tooltip-host',
+              style: { left: `${tipAt.x}px`, top: `${tipAt.y}px` },
+            },
+            t('moveToBin')
+          )
       );
     }
 
-    const SESSION_ARIA_ZH = /^会话“(.+?)”的操作$/;
-    const SESSION_ARIA_EN = /^Session actions for (.+)$/;
-
-    function sessionTitleFromLabel(label) {
-      const zh = SESSION_ARIA_ZH.exec(label ?? '');
-      if (zh) return zh[1];
-      const en = SESSION_ARIA_EN.exec(label ?? '');
-      if (en) return en[1];
-      return undefined;
-    }
-
-    function buildTitleIndex(ctx) {
-      const byId = ctx?.sessions?.list?.getSnapshot()?.byId ?? {};
-      const index = new Map();
-      for (const [id, record] of Object.entries(byId)) {
-        const title = record?.title;
-        if (!title) continue;
-        const list = index.get(title) ?? [];
-        list.push(id);
-        index.set(title, list);
-      }
-      return index;
-    }
-
-
-    /** 解析相对时间标签为"新→旧"的数值等级（越小越新）；解析失败返回 null */
-    function timeAgeRank(label) {
-      const s = String(label || '').trim();
-      if (s === 'now' || s === '刚刚') return 0;
-      let m = s.match(/^(\d+)\s*(min|h|d)$/);
-      if (m) return { min: 1, h: 60, d: 1440 }[m[2]] * Number(m[1]);
-      m = s.match(/^(\d+)\s*(分钟|小时|天)$/);
-      if (m) return { 分钟: 1, 小时: 60, 天: 1440 }[m[2]] * Number(m[1]);
-      return null;
-    }
-
-    /** 提取一行的时间标签文本（class 是哈希值，用文本模式识别） */
-    function timeLabelOf(row) {
-      for (const child of row.children) {
-        const text = String(child?.textContent ?? '').trim();
-        if (/^(刚刚|now|\d+\s*(min|h|d|分钟|小时|天))$/.test(text)) return text;
-      }
-      return '';
-    }
-
-    /** 收集同一列表作用域（组/平铺列表）内按 DOM 顺序排列的所有会话行 */
-    function siblingSessionRows(row) {
-      const scope = row.parentElement?.parentElement ?? row.parentElement ?? row;
-      try {
-        return [...scope.querySelectorAll('div[role="treeitem"]:not([aria-expanded])')];
-      } catch {
-        return [];
-      }
-    }
-
-    /** 把按钮/占位按钮插到行内标题前（与标题同排，保证所有行占位一致） */
-    function insertButtonIntoRow(row, el, title) {
-      let anchor = null;
-      if (title) {
-        anchor = [...row.children].find((child) => child.textContent === title || child.textContent?.includes(title));
-      }
-      if (!anchor) {
-        // 标题为空（空白会话行）：标题 span 是最后一个元素子节点（children: [slot, title]），
-        // 插到它前面 → [slot, button, title]，与正常行位置一致，避免被 React 重渲染移除。
-        const elements = [...row.children].filter((c) => c.nodeType === 1);
-        anchor = elements[elements.length - 1] ?? null;
-      }
-      if (anchor) {
-        row.insertBefore(el, anchor);
-      } else if (row.firstElementChild) {
-        row.insertBefore(el, row.firstElementChild);
-      } else {
-        row.prepend(el);
-      }
-    }
-
-    /** 无法解析会话 ID 时插入等宽隐形占位按钮：行布局与其它行保持一致，不再"往左靠" */
-    function injectSpacerButton(row, title) {
-      const spacer = document.createElement('button');
-      spacer.type = 'button';
-      spacer.className = 'dsh-trash-row-btn dsh-trash-row-btn--spacer';
-      spacer.setAttribute('aria-hidden', 'true');
-      spacer.tabIndex = -1;
-      row.dataset.dshTrashSpacer = 'true';
-      insertButtonIntoRow(row, spacer, title);
-    }
-
-    /** Inject per-row delete icon into left sidebar session tree */
-    function injectRowDelete(ctx) {
-      if (typeof document === 'undefined') return;
-      const snapshot = ctx?.sessions?.list?.getSnapshot?.() ?? {};
-      const byId = snapshot.byId ?? {};
-      const titleIndex = buildTitleIndex(ctx);
-      // 归档集合：sessions 列表快照未携带，但 workspaces 快照携带（同步可用）。
-      const archived = new Set(
-        (ctx?.workspaces?.list?.getSnapshot?.()?.archivedSessionIds) ||
-        ctx?.get?.('workspaces')?.list?.getSnapshot?.()?.archivedSessionIds ||
-        []
-      );
-      const rows = document.querySelectorAll('[role="treeitem"], [data-session-id], [data-tree-node-id], a[href*="/session/"], .dsh-session-item');
-
-      for (const row of rows) {
-        // 先移除旧的占位按钮：允许后续解析成功时升级为真实删除按钮
-        row.querySelectorAll('.dsh-trash-row-btn--spacer').forEach((el) => el.remove());
-        delete row.dataset.dshTrashSpacer;
-
-        // 自愈：标记已设置但按钮丢失（例如��� React 重渲染移除）时，清除标记重新注入
-        if (row.dataset.dshTrashInjected === 'true' && !row.querySelector('[data-dsh-session-recycle-bin-delete]')) {
-          delete row.dataset.dshTrashInjected;
-          row.classList.remove('dsh-trash-row');
-        }
-
-        if (row.querySelector('[data-dsh-session-recycle-bin-delete]') || row.dataset.dshTrashInjected === 'true') continue;
-
-        let sessionId = row.dataset.sessionId || row.dataset.treeNodeId;
-        let title = '';
-
-        const actionBtn = [...row.querySelectorAll('button')].find((b) => {
-          const l = b.getAttribute('aria-label') ?? '';
-          return SESSION_ARIA_ZH.test(l) || SESSION_ARIA_EN.test(l);
-        });
-
-        if (actionBtn) {
-          title = sessionTitleFromLabel(actionBtn.getAttribute('aria-label')) || '';
-          if (title && titleIndex.has(title)) {
-            // 只考虑"可见"候选：排除已归档、空白、子代理会话
-            const liveIds = (titleIndex.get(title) || []).filter((id) => {
-              const rec = byId[id];
-              if (!rec) return false;
-              if (rec.blank || rec.origin === 'subagent') return false;
-              if (archived.has(id)) return false;
-              return true;
-            });
-            if (liveIds.length === 1) {
-              sessionId = liveIds[0];
-            } else if (liveIds.length > 1) {
-              const currentId = snapshot.current;
-              // ① 选中行消歧：当前选中的行就是 current 会话（唯一确定事实）
-              if (row.getAttribute('aria-selected') === 'true' && currentId && liveIds.includes(currentId)) {
-                sessionId = currentId;
-              } else {
-                // ② 位置消歧（仅当列表按更新时间排序时可安全使用）：
-                //    同名行按 DOM 顺序取号，候选按 byRecency（updatedAt 降序、id 升序）排序对应。
-                //    用同名行的相对时间标签校验顺序单调（新→旧），不一致则放弃（安全回退占位）。
-                const sameTitled = siblingSessionRows(row).filter((r) => {
-                  const b = [...r.querySelectorAll('button')].find((btn) => {
-                    const l = btn.getAttribute('aria-label') ?? '';
-                    return SESSION_ARIA_ZH.test(l) || SESSION_ARIA_EN.test(l);
-                  });
-                  return b && sessionTitleFromLabel(b.getAttribute('aria-label')) === title;
-                });
-                const index = sameTitled.indexOf(row);
-                let orderValid = index !== -1;
-                if (orderValid) {
-                  let prev = -1;
-                  for (const r of sameTitled) {
-                    const rank = timeAgeRank(timeLabelOf(r));
-                    if (rank === null || rank < prev) { orderValid = false; break; }
-                    prev = rank;
-                  }
-                }
-                if (orderValid) {
-                  const ordered = [...liveIds].sort((a, b) => {
-                    const ua = byId[a]?.updatedAt ?? 0;
-                    const ub = byId[b]?.updatedAt ?? 0;
-                    if (ub !== ua) return ub - ua;
-                    return a < b ? -1 : 1;
-                  });
-                  if (index >= 0 && index < ordered.length) sessionId = ordered[index];
-                }
-              }
-            }
-          }
-        }
-
-        if (!sessionId && row.getAttribute('href')) {
-          const m = row.getAttribute('href').match(/\/session\/([^\/]+)/);
-          if (m) sessionId = m[1];
-        }
-
-        // 空白新建会话兜底：DSH 只渲染"当前"的空白会话行且带 aria-selected=true，
-        // 因此选中的空白行即可安全确定为 current 空白会话。
-        if (!sessionId && !actionBtn && row.tagName === 'DIV' && !row.hasAttribute('aria-expanded')
-            && row.getAttribute('aria-selected') === 'true') {
-          const currentId = snapshot.current;
-          if (currentId && snapshot.byId?.[currentId]?.blank === true) {
-            sessionId = currentId;
-          }
-        }
-
-        if (!sessionId) {
-          // 无法解析 ID 的会话行（如同名且未选中且无法安全消歧的行、个别过渡状态）：
-          // 插入等宽隐形占位按钮保持行对齐；只处理"会话形态"的行，
-          // 不触碰工作区行（含 aria-expanded）与搜索结果行（button 元素）。
-          const sessionLike = actionBtn || (row.tagName === 'DIV' && !row.hasAttribute('aria-expanded'));
-          if (sessionLike) injectSpacerButton(row, title);
-          continue;
-        }
-        row.dataset.dshTrashInjected = 'true';
-        row.classList.add('dsh-trash-row');
-
-        if (!title && sessionId) {
-          title = resolveSessionTitle(ctx, sessionId, '');
-        }
-
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'dsh-trash-row-btn';
-        button.dataset.dshSessionRecycleBinDelete = sessionId;
-        button.title = t('moveToBin');
-        button.setAttribute('aria-label', t('moveToBin'));
-        button.innerHTML =
-          '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" ' +
-          'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-          '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>' +
-          '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>' +
-          '<line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
-
-        button.addEventListener('click', async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          try {
-            await api(ctx, `${API_PREFIX}/archive`, { method: 'POST', body: { sessionId, title } });
-            purgeFromBrowserSessionStore(ctx, [sessionId]);
-            showToastLayer(t('movedToBin', { title: title || t('session') }), async () => {
-              await api(ctx, `${API_PREFIX}/unarchive`, { method: 'POST', body: { sessionId } });
-            });
-          } catch (err) {
-            showToastLayer(t('moveFailed', { message: localizedError(err) }));
-          }
-        });
-
-        // 挂载到左侧空白处（标题前面或左侧 Icon 旁边）
-        insertButtonIntoRow(row, button, title);
-      }
-    }
 
     /** Inject Trash Icon into settings sidebar */
     function injectSettingsMenuIcon() {
@@ -1496,8 +1316,18 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** Watch sidebar tree mutations */
-    function startSidebarRowDelete(ctx) {
+    /**
+     * Keep the Settings → "会话回收站" nav item's icon in sync.
+     *
+     * v0.4.4 removed the sidebar row injection that used to share this
+     * observer: DSH now ships its own archive hover button on every session
+     * row (`sidebar.workspaces.session.row.action`), so a second, differently
+     * worded trash affordance next to it did the same job under a different
+     * verb. That also retired the dominant cost of this observer — the
+     * per-mutation scan of every session row, with its title-index and
+     * position-disambiguation passes — leaving only this idempotent icon swap.
+     */
+    function startSettingsIconSync() {
       if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return () => {};
       let raf = 0;
       const schedule = () => {
@@ -1505,10 +1335,9 @@ window.__ModuleLoader__.load({
         raf = requestAnimationFrame(() => {
           raf = 0;
           try {
-            injectRowDelete(ctx);
             injectSettingsMenuIcon();
           } catch (error) {
-            console.error('session-trash: sidebar row inject failed', error);
+            console.error('session-trash: settings icon inject failed', error);
           }
         });
       };
@@ -1558,13 +1387,20 @@ window.__ModuleLoader__.load({
             name: 'conversation.session.header.actions',
             id: 'delete-session',
             order: 400,
-            label: () => t('deleteSession'),
+            // The label must name what the click does. The action archives to
+            // the recycle bin (reversible, undoable via the toast) — it does
+            // not delete anything — so it says "移入回收站", the same verb as
+            // the panel and as the button's own title. It used to read
+            // "删除会话" while the button tooltip said "移入回收站": one button,
+            // two names, and a trash icon promising a permanence it did not
+            // have.
+            label: () => t('moveToBin'),
           },
           (props) => DeleteSessionAction({ ...props, ctx })
         )
       );
 
-      ctx.effect(() => startSidebarRowDelete(ctx));
+      ctx.effect(() => startSettingsIconSync());
     }
 
     exports.apply = apply;

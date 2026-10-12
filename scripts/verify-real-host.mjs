@@ -95,9 +95,65 @@ ctx.plugin({
     });
   },
 });
+/**
+ * A minimal VALID event list for the host's own Session format generation.
+ *
+ * Format v4 validates that an assistant message lands inside an OPEN turn AND
+ * an OPEN step (`requireStep`: turn !== null && step !== null && data.turn
+ * === turn && data.step === step). The v3-era fixture — turn/start + the two
+ * messages, nothing else — was therefore rejected outright on 0.2.0-rc.2 with
+ * `assistant/message does not match an open turn and step`, which left BOTH
+ * the preview and the old log-derived turn count unable to read the log at
+ * all. Older formats have no step events, so the list is built per generation.
+ */
+function sessionEvents({ userId, userText, assistantId, assistantText }) {
+  const head = [
+    { type: 'turn/start', seq: 0, time: NOW, data: { turn: 1 } },
+    { type: 'user/message', seq: 1, time: NOW, surfaceOp: 'append', data: { id: userId, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: userText }] } },
+  ];
+  const message = {
+    type: 'assistant/message',
+    seq: 2,
+    time: NOW,
+    surfaceOp: 'append',
+    data: {
+      turn: 1,
+      step: 1,
+      message: { id: assistantId, role: 'assistant', source: { kind: 'model', provider: 'test', model: 'test' }, content: [{ type: 'text', text: assistantText }] },
+      stream: [],
+    },
+  };
+  if (HOST_FORMAT_VERSION < 4) return [...head, message];
+  return [
+    ...head,
+    { type: 'step/start', seq: 2, time: NOW, data: { turn: 1, step: 1 } },
+    { ...message, seq: 3 },
+    { type: 'step/end', seq: 4, time: NOW, data: { turn: 1, step: 1 } },
+    { type: 'turn/end', seq: 5, time: NOW, data: { turn: 1 } },
+  ];
+}
+
 ctx.plugin({
   name: 'sessionProjectionCache-stub',
-  apply(c) { c.provide('sessionProjectionCache', { requireTable: () => ({ delete: async () => {} }), markClean: () => {} }); },
+  apply(c) {
+    c.provide('sessionProjectionCache', {
+      requireTable: () => ({ delete: async () => {} }),
+      markClean: () => {},
+      // The cache is STUBBED on purpose: this harness writes stored logs
+      // straight through persistence, so no live Session ever reaches
+      // `turn/end`, no checkpoint is folded, and a real cache would hold no
+      // record for either fixture session. The stub answers the two faces the
+      // recycle bin reads, and checks the identity witness the plugin must
+      // pass — a real SessionHeader at the host's current format generation.
+      cachedSnapshot: (header, keys) => {
+        if (header?.version !== HOST_FORMAT_VERSION) {
+          throw new Error(`cachedSnapshot got a non-current header (v${header?.version}) for ${header?.id}`);
+        }
+        return { asOfSeq: 1, values: (keys ?? ['sessionStats']).includes('sessionStats') ? { sessionStats: { turns: 1 } } : {} };
+      },
+      cachedPredecessorTitle: () => undefined,
+    });
+  },
 });
 await new Promise((r) => setTimeout(r, 300));
 
@@ -119,14 +175,12 @@ check('plugin mounted and registered its routes', !!ctx.get('sessionTrashHost') 
 const NOW = Date.now();
 const SID = 'verify-sess-1';
 try {
-  const events = [
-    { type: 'turn/start', seq: 0, time: NOW, data: { turn: 1 } },
-    { type: 'user/message', seq: 1, time: NOW, surfaceOp: 'append', data: { id: 'msg-u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '第一条用户消息' }] } },
-    { type: 'assistant/message', seq: 2, time: NOW, surfaceOp: 'append', data: { turn: 1, step: 1, message: { id: 'msg-a1', role: 'assistant', source: { kind: 'model', provider: 'test', model: 'test' }, content: [{ type: 'text', text: '助手回复内容' }] }, stream: [] } },
-    // NOTE: no turn/end — a bare turn/end without its react-loop events is
-    // rejected as malformed by the <=0.1.2 format layer; the plugin only
-    // needs turn/start + the two messages.
-  ];
+  const events = sessionEvents({
+    userId: 'msg-u1',
+    userText: '第一条用户消息',
+    assistantId: 'msg-a1',
+    assistantText: '助手回复内容',
+  });
   const created = await persistence.create({ version: HOST_FORMAT_VERSION, id: SID, createdAt: NOW, cwd: ROOT, isSeeded: false }, 0);
   if (created && typeof created.append === 'function') {
     // 0.1.5 handle API
@@ -168,9 +222,11 @@ check('archived set contains the session', (registry.requireState().archivedSess
 const list = await callRoute('/api/session-trash/list');
 const item = list.body?.data?.items?.find((i) => i.sessionId === SID);
 check('GET /list lists the archived session', !!item);
-check('title resolved from the stored header', item?.title === 'Verify Session', 'title=' + item?.title);
-check('turnCount read through the host event API', item?.turnCount === 1, 'turnCount=' + item?.turnCount);
-check('fileSize resolved from the physical log path', (item?.fileSize ?? 0) > 0, 'fileSize=' + item?.fileSize);
+// The stored SessionHeader has carried NO title since 0.2; the title the panel
+// shows is the one the /archive request persisted into archivedMeta.
+check('title persisted at archive time', item?.title === 'Verify Session', 'title=' + item?.title);
+check('turnCount read through the projection cache', item?.turnCount === 1, 'turnCount=' + item?.turnCount);
+check('fileSize read from the listing snapshot (no stat)', (item?.fileSize ?? 0) > 0, 'fileSize=' + item?.fileSize);
 
 const messages = await callRoute('/api/session-trash/messages', { query: 'sessionId=' + SID });
 const msgs = messages.body?.data?.messages ?? [];
@@ -203,11 +259,12 @@ check('archive set no longer contains the session', !(registry.requireState().ar
 const SID2 = 'verify-sess-held';
 let heldHandle = null;
 try {
-  const events2 = [
-    { type: 'turn/start', seq: 0, time: NOW, data: { turn: 1 } },
-    { type: 'user/message', seq: 1, time: NOW, surfaceOp: 'append', data: { id: 'msg-u2', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '持有中的用户消息' }] } },
-    { type: 'assistant/message', seq: 2, time: NOW, surfaceOp: 'append', data: { turn: 1, step: 1, message: { id: 'msg-a2', role: 'assistant', source: { kind: 'model', provider: 'test', model: 'test' }, content: [{ type: 'text', text: '持有中的助手回复' }] }, stream: [] } },
-  ];
+  const events2 = sessionEvents({
+    userId: 'msg-u2',
+    userText: '持有中的用户消息',
+    assistantId: 'msg-a2',
+    assistantText: '持有中的助手回复',
+  });
   const created2 = await persistence.create({ version: HOST_FORMAT_VERSION, id: SID2, createdAt: NOW, cwd: ROOT, isSeeded: false }, 0);
   if (created2 && typeof created2.append === 'function') {
     await created2.append(events2);

@@ -94,13 +94,24 @@ async function importBundleShim() {
 
 /** Root context + the four injected services, with inspectable fakes. */
 function createHarness(Context) {
-  // persistence.inspect reports 3 turns and one real user message, so any
-  // listArchivedSessions() bound to a LIVE context yields turnCount 3 and
-  // the derived title '你好'. A stale (dead-context) closure swallows the
-  // ctx.sessionPersistence throw and yields turnCount 0 — the user-visible
-  // symptom these tests pin down.
+  // The recycle bin reads its listing facts from the projection cache — the
+  // same zero-I/O `cachedSnapshot(header, keys)` face DSH's own session list
+  // uses. This fake answers with 3 turns and the title '你好', so a
+  // listArchivedSessions() bound to a LIVE context yields turnCount 3. A
+  // stale (dead-context) closure snapshotted no cache at patch time and
+  // yields turnCount 0 — the user-visible symptom these tests pin down.
+  const cache = {
+    cachedSnapshot: () => ({ asOfSeq: 4, values: { title: '你好', sessionStats: { turns: 3 } } }),
+  };
   const persistence = {
-    list: async () => [],
+    // A listing a real host would produce: the header is the lifecycle
+    // identity witness the projection cache validates before serving a
+    // record, and sizeBytes is what the panel shows without a stat().
+    list: async () => [{
+      header: { id: 'sess-1', version: 3, createdAt: 1_700_000_000_000, cwd: '/tmp/project', isSeeded: false },
+      revision: 'rev-1',
+      sizeBytes: 2048,
+    }],
     findLog: async () => undefined,
     inspect: async () => ({
       events: [
@@ -117,7 +128,6 @@ function createHarness(Context) {
     requireState: () => ({ archivedSessionIds: ['sess-1'] }),
     entities: new Map(),
   };
-  const cache = {};
   const routeTable = new Map();
   const webServer = {
     register(route) {
@@ -194,7 +204,7 @@ describe('SessionTrashHost fiber lifecycle (real cordis)', { skip: !cordisDir &&
       assert.ok(h.root.get('sessionTrashHost'), 'service must be re-provided after reinstall');
       const items = await h.registry.listArchivedSessions();
       assert.equal(items[0].turnCount, 3, 'turn counts must survive uninstall+reinstall');
-      assert.equal(items[0].title, '你好', 'derived titles must survive uninstall+reinstall');
+      assert.equal(items[0].title, '你好', 'cached titles must survive uninstall+reinstall');
     } finally {
       await cleanup();
     }
@@ -221,7 +231,7 @@ describe('SessionTrashHost fiber lifecycle (real cordis)', { skip: !cordisDir &&
 
       const items = await h.registry.listArchivedSessions();
       assert.equal(items[0].turnCount, 3, 'a fresh install must replace the stale dead-context methods');
-      assert.equal(items[0].title, '你好', 'a fresh install must restore derived titles');
+      assert.equal(items[0].title, '你好', 'a fresh install must restore the cached titles');
 
       await fiber.dispose();
       assert.equal(h.routeTable.size, 0, 'unload must unregister every route');
@@ -242,15 +252,16 @@ describe('SessionTrashHost fiber lifecycle (real cordis)', { skip: !cordisDir &&
       // Keep a reference to the patched method, then fully unload the plugin
       // fiber — the reference simulates a method leaked onto the shared
       // registry by an older bundle. v0.3.3 snapshots persistence at patch
-      // time, so the leaked method must keep counting turns; the per-call
-      // ctx.sessionPersistence variant instead swallowed the dead-fiber throw
-      // and reported 0 (the production symptom).
+      // time and v0.4.4 snapshots the projection cache the same way, so the
+      // leaked method must keep counting turns; resolving either service per
+      // call instead swallowed the dead-fiber lookup and reported 0 (the
+      // production symptom).
       const leakedList = h.registry.listArchivedSessions;
       await fiber.dispose();
       assert.equal(h.registry.listArchivedSessions, undefined, 'unload must remove the patched methods');
       const items = await leakedList();
       assert.equal(items[0].turnCount, 3, 'a leaked patch must stay functional (no dead-context throw)');
-      assert.equal(items[0].title, '你好', 'a leaked patch must keep deriving titles');
+      assert.equal(items[0].title, '你好', 'a leaked patch must keep serving cached titles');
     } finally {
       await cleanup();
     }
