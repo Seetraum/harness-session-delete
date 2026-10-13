@@ -26,6 +26,22 @@ window.__ModuleLoader__.load({
     /** Host tooltip delay for an icon-only action button (dsh-client-ui-workspace). */
     const TOOLTIP_DELAY_MS = 500;
 
+    /**
+     * Hover info card timing: `OPEN` matches the panel's existing 200ms hover
+     * delay, `CLOSE` is the grace period that lets the pointer travel from the
+     * row onto the card without it vanishing on the way.
+     */
+    const TOOLTIP_OPEN_DELAY_MS = 200;
+    const TOOLTIP_CLOSE_DELAY_MS = 250;
+
+    /**
+     * Sub-session (delegation children) display limits: rows rendered before the
+     * "N more" control, and the list length above which the permanent-delete
+     * confirmation scrolls its own list instead of growing the dialog.
+     */
+    const CHILD_ROW_LIMIT = 50;
+    const CASCADE_DIALOG_LIST_LIMIT = 8;
+
     const MESSAGES = {
       en: {
         undo: 'Undo',
@@ -77,7 +93,7 @@ window.__ModuleLoader__.load({
         assistant: '🤖 Assistant',
         cancel: 'Cancel',
         confirmDelete: 'Confirm deletion',
-        path: 'Path: {path}',
+        storagePath: 'Storage path: {path}',
         noActiveSession: 'Could not identify the active session ID',
         movedToBin: 'Moved session “{title}” to the recycle bin',
         currentSession: 'Current session',
@@ -85,6 +101,27 @@ window.__ModuleLoader__.load({
         moveFailed: 'Failed to move session to the recycle bin: {message}',
         moveToBin: 'Move to Recycle Bin',
         sessionRunning: 'The session is currently running and cannot be deleted.',
+        // Sub-session (delegation children) badge, inline list and cascade delete.
+        listSeparator: ', ',
+        childrenCount: '{count} sub-session(s)',
+        childrenBadgeLabel: 'Sub-sessions of this session: {count}',
+        childrenRunning: 'Running',
+        childrenRunningHint: 'Can be deleted once it finishes',
+        childrenMore: '{count} more',
+        childrenEmpty: 'No sub-sessions',
+        childrenJustNow: 'Just now',
+        childrenMinutesAgo: '{count} min ago',
+        childrenHoursAgo: '{count} h ago',
+        childrenYesterday: 'Yesterday',
+        childrenThisWeek: 'This week',
+        childrenEarlier: 'Earlier',
+        selectSessionOnly: 'Selects this session only, not its sub-sessions',
+        childrenRunningBlocked: 'Sub-session “{titles}” is still running — delete it after it finishes.',
+        childrenNoneSelected: 'Select at least one sub-session first.',
+        cascadeDeleteTitle: 'Confirm permanent deletion',
+        cascadeDeleteBody: 'Permanently delete {parents} main session(s) + {children} sub-session(s) ({size} in total)? This cannot be undone.',
+        orphanCardTitle: 'Deleted main session · {count} sub-session(s) kept',
+        orphanKept: 'Kept',
       },
       zh: {
         undo: '撤销',
@@ -136,7 +173,7 @@ window.__ModuleLoader__.load({
         assistant: '🤖 助手',
         cancel: '取消',
         confirmDelete: '确定删除',
-        path: '路径: {path}',
+        storagePath: '存储路径: {path}',
         noActiveSession: '无法识别当前活动会话 ID',
         movedToBin: '已将会话「{title}」移入回收站',
         currentSession: '当前会话',
@@ -144,6 +181,27 @@ window.__ModuleLoader__.load({
         moveFailed: '移入回收站失败: {message}',
         moveToBin: '移入回收站',
         sessionRunning: '会话正在运行中，无法删除',
+        // 子会话（委派后代）徽标、行内清单与级联删除
+        listSeparator: '、',
+        childrenCount: '{count} 个子会话',
+        childrenBadgeLabel: '该会话的子会话数：{count}',
+        childrenRunning: '运行中',
+        childrenRunningHint: '结束后可删除',
+        childrenMore: '还有 {count} 条',
+        childrenEmpty: '没有子会话',
+        childrenJustNow: '刚刚',
+        childrenMinutesAgo: '{count} 分钟前',
+        childrenHoursAgo: '{count} 小时前',
+        childrenYesterday: '昨天',
+        childrenThisWeek: '本周',
+        childrenEarlier: '更早',
+        selectSessionOnly: '仅选择该会话，不含其子会话',
+        childrenRunningBlocked: '子会话「{titles}」仍在运行中，结束后才能删除。',
+        childrenNoneSelected: '请先勾选至少一个子会话。',
+        cascadeDeleteTitle: '彻底删除会话',
+        cascadeDeleteBody: '确定要彻底删除 {parents} 个主会话 + {children} 个子会话（共 {size}）吗？此操作不可撤销。',
+        orphanCardTitle: '已删除的主会话 · 保留 {count} 个子会话',
+        orphanKept: '已保留',
       },
     };
 
@@ -336,6 +394,36 @@ window.__ModuleLoader__.load({
     const TrashIcon = (props) => renderTrashIcon(props);
 
     /**
+     * Sub-session glyph for the children badge: one parent path forking into a
+     * child, the same metaphor as the delegated sessions the badge counts.
+     * Defaults match renderDiskIcon so both badges stay the same size.
+     */
+    function renderChildrenIcon(props = {}) {
+      const { style, ...rest } = props;
+      return h(
+        'svg',
+        {
+          xmlns: 'http://www.w3.org/2000/svg',
+          width: props.width || '14',
+          height: props.height || '14',
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: '2',
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+          style,
+          ...rest,
+        },
+        h('line', { x1: '6', y1: '3', x2: '6', y2: '15' }),
+        h('circle', { cx: '18', cy: '6', r: '3' }),
+        h('circle', { cx: '6', cy: '18', r: '3' }),
+        h('path', { d: 'M18 9a9 9 0 0 1-9 9' })
+      );
+    }
+
+    /**
      * Inject the plugin stylesheet (external client.css) exactly once.
      * The host serves it at GET /api/session-trash/client.css; all colors
      * are CSS variables that adapt to the OS light/dark color mode.
@@ -412,6 +500,30 @@ window.__ModuleLoader__.load({
       return `${year}/${month}/${day} ${hours}:${minutes}`;
     }
 
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    /**
+     * Relative age, for the row where an absolute timestamp does not fit.
+     *
+     * Buckets are calendar-based, not "N hours ago" arithmetic: a 23:30 event
+     * read at 00:10 is "yesterday", not "0 hours ago". The absolute timestamp
+     * is never lost — the caller keeps it in the row's `title` tooltip.
+     */
+    function formatRelativeTime(ts) {
+      if (!ts) return '';
+      const then = new Date(ts);
+      const now = new Date();
+      const ageMs = now.getTime() - then.getTime();
+      if (ageMs < 60 * 1000) return t('childrenJustNow');
+      const minutes = Math.floor(ageMs / 60000);
+      if (minutes < 60) return t('childrenMinutesAgo', { count: minutes });
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      if (then.getTime() >= startOfToday) return t('childrenHoursAgo', { count: Math.floor(minutes / 60) });
+      if (then.getTime() >= startOfToday - DAY_MS) return t('childrenYesterday');
+      if (then.getTime() >= startOfToday - 6 * DAY_MS) return t('childrenThisWeek');
+      return t('childrenEarlier');
+    }
+
     /** Make signed API requests. */
     async function api(ctx, path, options = {}) {
       const response = await fetch(path, {
@@ -426,6 +538,9 @@ window.__ModuleLoader__.load({
           ...(options.headers || {}),
         },
         body: options.body ? JSON.stringify(options.body) : undefined,
+        // Only the deferred /children request passes one: closing the settings
+        // section must not let a late grouping response land on a dead panel.
+        signal: options.signal,
       });
 
       const payload = await response.json().catch(() => ({}));
@@ -436,6 +551,44 @@ window.__ModuleLoader__.load({
         throw error;
       }
       return payload.data;
+    }
+
+    /**
+     * Display form of a log path: the part under the user's home reads `~/…`.
+     * The browser has no HOME to compare against, so the two shapes a DSH
+     * profile can sit under are matched by prefix and anything else is shown
+     * unchanged; the row keeps the FULL path in its `title`.
+     */
+    function abbreviateHomePath(path) {
+      return String(path ?? '')
+        .replace(/^(?:\/Users|\/home)\/[^/]+\//, '~/')
+        .replace(/^\/root\//, '~/')
+        .replace(/^([A-Za-z]:\\Users)\\[^\\]+\\/, '~\\');
+    }
+
+    /**
+     * Ids /purge could not delete. The frozen route contract reports them as
+     * `failed`; builds before it used `errors`, and a plugin may be loaded
+     * against either, so read both rather than silently reporting success.
+     */
+    function purgeFailures(result) {
+      const list = result?.failed ?? result?.errors ?? [];
+      return Array.isArray(list) ? list : [];
+    }
+
+    /**
+     * `orphans` arrives as { [missingParentId]: ChildInfo[] } (a deleted main
+     * session whose children were kept). Keep the host's key order and drop
+     * groups with no children — there is nothing to show for those.
+     */
+    function orphanGroups(orphans) {
+      if (!orphans || typeof orphans !== 'object') return [];
+      return Object.keys(orphans)
+        .map((parentId) => ({
+          parentId,
+          children: Array.isArray(orphans[parentId]) ? orphans[parentId] : [],
+        }))
+        .filter((group) => group.children.length > 0);
     }
 
     /** 强制浏览器端 sessions / workspaces 服务从服务端重新拉取权威列表 */
@@ -707,6 +860,124 @@ window.__ModuleLoader__.load({
       const [selectedSessionIds, setSelectedSessionIds] = useState(new Set());
       const [hoverTooltip, setHoverTooltip] = useState(null);
       const hoverTimerRef = React.useRef(null);
+      const tooltipCloseRef = React.useRef(null);
+      const tooltipRef = React.useRef(null);
+
+      // ── Hover info card ──────────────────────────────────────────────────
+      // The card must be able to dismiss ITSELF: the row's onMouseLeave can
+      // never fire again once that row is gone, so deleting the last row used
+      // to leave the card floating over an empty panel.
+      const cancelTooltipClose = () => {
+        if (tooltipCloseRef.current) clearTimeout(tooltipCloseRef.current);
+        tooltipCloseRef.current = null;
+      };
+
+      const closeTooltip = () => {
+        cancelTooltipClose();
+        if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+        setHoverTooltip(null);
+      };
+
+      const scheduleTooltipClose = () => {
+        cancelTooltipClose();
+        tooltipCloseRef.current = setTimeout(() => {
+          tooltipCloseRef.current = null;
+          // A text selection being dragged past the card edge is not a reason
+          // to take the text away; Esc and the other closers still work.
+          const selected = typeof window?.getSelection === 'function'
+            ? String(window.getSelection() ?? '')
+            : '';
+          if (selected) return;
+          setHoverTooltip(null);
+        }, TOOLTIP_CLOSE_DELAY_MS);
+      };
+
+      /** Anchor the card to the row it describes — never to the pointer. */
+      const openTooltipFor = (item, displayTitle, rect) => {
+        setHoverTooltip({
+          sessionId: item.sessionId,
+          title: displayTitle,
+          id: item.sessionId,
+          // null when the host found no log (ghost session): the row is then
+          // omitted entirely rather than showing an empty value.
+          logPath: typeof item.logPath === 'string' && item.logPath ? item.logPath : null,
+          anchor: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+          placement: 'above',
+          left: rect.left,
+          top: rect.top - 8,
+        });
+      };
+
+      // Every dismissal route that does not depend on the hovered row surviving:
+      // Esc, wheel, a click outside the card, a viewport resize, and the card's
+      // own mouseleave (delayed so the pointer can travel onto it).
+      useEffect(() => {
+        if (!hoverTooltip) return undefined;
+        const onPointerDown = (e) => {
+          const card = tooltipRef.current;
+          if (card && typeof card.contains === 'function' && card.contains(e.target)) return;
+          closeTooltip();
+        };
+        const onKeyDown = (e) => { if (e.key === 'Escape') closeTooltip(); };
+        const onResize = () => closeTooltip();
+        const onScroll = () => closeTooltip();
+        document.addEventListener('pointerdown', onPointerDown, true);
+        document.addEventListener('keydown', onKeyDown, true);
+        window.addEventListener('resize', onResize);
+        window.addEventListener('wheel', onScroll, { passive: true });
+        window.addEventListener('scroll', onScroll, true);
+        return () => {
+          document.removeEventListener('pointerdown', onPointerDown, true);
+          document.removeEventListener('keydown', onKeyDown, true);
+          window.removeEventListener('resize', onResize);
+          window.removeEventListener('wheel', onScroll);
+          window.removeEventListener('scroll', onScroll, true);
+        };
+      }, [hoverTooltip]);
+
+      // A list change can delete the hovered session without a click on it.
+      useEffect(() => {
+        if (!hoverTooltip) return;
+        if (!items.some((item) => item.sessionId === hoverTooltip.sessionId)) closeTooltip();
+      }, [items, hoverTooltip]);
+
+      // Measured placement: clamp into the viewport and flip below the row when
+      // there is no room above it. Runs on the real box, so a long title cannot
+      // push the card off-screen.
+      useEffect(() => {
+        const el = tooltipRef.current;
+        if (!hoverTooltip || !el || typeof el.getBoundingClientRect !== 'function') return;
+        const box = el.getBoundingClientRect();
+        const viewportWidth = Number(window?.innerWidth) || 0;
+        const viewportHeight = Number(window?.innerHeight) || 0;
+        const margin = 8;
+        let placement = hoverTooltip.placement;
+        if (viewportHeight > 0) {
+          if (placement === 'above' && hoverTooltip.anchor.top - box.height - margin < 0) placement = 'below';
+          else if (placement === 'below' && hoverTooltip.anchor.bottom + box.height + margin > viewportHeight) placement = 'above';
+        }
+        const wantedLeft = viewportWidth > 0
+          ? Math.min(Math.max(hoverTooltip.anchor.left, margin), Math.max(margin, viewportWidth - box.width - margin))
+          : hoverTooltip.anchor.left;
+        const wantedTop = placement === 'above'
+          ? hoverTooltip.anchor.top - margin
+          : hoverTooltip.anchor.bottom + margin;
+        if (wantedLeft === hoverTooltip.left && wantedTop === hoverTooltip.top && placement === hoverTooltip.placement) return;
+        setHoverTooltip((prev) => (prev ? { ...prev, left: wantedLeft, top: wantedTop, placement } : prev));
+      }, [hoverTooltip]);
+
+      // ── Sub-sessions (delegated children) ────────────────────────────────
+      // `childIndex` is the /children answer: null means "not known" (never
+      // fetched, failed, or degraded) — and an unknown count renders NO badge
+      // rather than a wrong one. `uncheckedChildren` holds only the opt-OUT
+      // ids, so a freshly grouped child is checked by default.
+      const [childIndex, setChildIndex] = useState(null);
+      const [childEpoch, setChildEpoch] = useState(0);
+      const [expandedCards, setExpandedCards] = useState(() => new Set());
+      const [uncheckedChildren, setUncheckedChildren] = useState(() => ({}));
+      const [fullChildLists, setFullChildLists] = useState(() => new Set());
+      const childRequestRef = React.useRef({ signature: null, promise: null, controller: null, retried: null });
 
       const toggleSelectSession = (sessionId) => {
         setSelectedSessionIds((prev) => {
@@ -736,12 +1007,87 @@ window.__ModuleLoader__.load({
         try {
           const value = await api(ctx, `${API_PREFIX}/list`);
           setItems(value?.items ?? []);
+          // A fresh /list snapshot is the only thing that can add or remove a
+          // card, so it is also what re-asks for the sub-session grouping.
+          setChildEpoch((epoch) => epoch + 1);
         } catch (err) {
           setError(err.message || t('loadFailed'));
         } finally {
           setLoading(false);
         }
       }, [ctx]);
+
+      /**
+       * Ask the host for the sub-session grouping that backfills the badges.
+       *
+       * Deferred on purpose: the panel paints the /list snapshot first, so the
+       * first screen stays zero-I/O and this grouping only backfills numbers.
+       * Dedupe is by id signature while a request is in flight, and aborting
+       * supersedes the previous request instead of racing it.
+       *
+       * The body carries NO sessionIds. The host narrows a report it had to
+       * build by scanning the whole lineage anyway, so omitting the list costs
+       * the same — and it is the only way the orphans of an already-deleted
+       * main session are reported: a parent id that is not requested is never
+       * returned (tests/session-trash-children.test.js, "an unrequested parent
+       * id is not reported"), and a kept child's parent is by definition not in
+       * the trash list. Cards match against `data.groups` below.
+       */
+      const loadChildGroups = useCallback((signature) => {
+        const state = childRequestRef.current;
+        if (state.signature === signature && state.promise) return state.promise;
+        state.controller?.abort();
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        const run = (async () => {
+          try {
+            const data = await api(ctx, `${API_PREFIX}/children`, {
+              method: 'POST',
+              body: {},
+              signal: controller?.signal,
+            });
+            if (controller?.signal?.aborted) return;
+            // degraded ⇒ the host could not answer authoritatively. Surfacing
+            // nothing is the only honest option: a badge is a count claim.
+            if (!data || data.degraded === true) {
+              setChildIndex(null);
+              return;
+            }
+            setChildIndex({ groups: data.groups ?? {}, orphans: orphanGroups(data.orphans) });
+          } catch (err) {
+            // Failure is silent and terminal for this signature: one attempt
+            // per /list refresh, so a broken route cannot become a retry storm.
+            if (controller?.signal?.aborted) return;
+            setChildIndex(null);
+          }
+        })();
+        state.signature = signature;
+        state.promise = run;
+        state.controller = controller;
+        run.finally(() => {
+          if (state.promise === run) state.promise = null;
+        });
+        return run;
+      }, [ctx]);
+
+      const childIds = React.useMemo(
+        () => items.map((item) => item.sessionId).filter(Boolean),
+        [items]
+      );
+      const childSignature = childIds.join('|');
+
+      useEffect(() => {
+        if (loading || childIds.length === 0) return undefined;
+        loadChildGroups(childSignature);
+        // Closing the settings section (or reloading the list) cancels the
+        // grouping request the closed panel can no longer use.
+        return () => {
+          const state = childRequestRef.current;
+          state.controller?.abort();
+          state.controller = null;
+          state.promise = null;
+          state.signature = null;
+        };
+      }, [loading, childSignature, childEpoch, loadChildGroups]);
 
       useEffect(() => {
         loadItems();
@@ -790,15 +1136,17 @@ window.__ModuleLoader__.load({
           onConfirm: async () => {
             try {
               const result = await api(ctx, `${API_PREFIX}/purge`, { method: 'POST', body: { sessionIds: [sessionId] } });
-              const failedIds = new Set((result?.errors ?? []).map((e) => e.sessionId));
+              const failures = purgeFailures(result);
+              const failedIds = new Set(failures.map((e) => e.sessionId));
               if (failedIds.has(sessionId)) {
-                const errItem = result.errors.find((e) => e.sessionId === sessionId);
+                const errItem = failures.find((e) => e.sessionId === sessionId);
                 showToastLayer(t('deleteFailed', { message: localizedError(errItem) }));
               } else {
                 purgeFromBrowserSessionStore(ctx, [sessionId]);
                 showToastLayer(t('deleted'));
               }
               setConfirmModal(null);
+              closeTooltip();
               loadItems();
             } catch (err) {
               showToastLayer(t('deleteFailed', { message: localizedError(err) }));
@@ -816,7 +1164,7 @@ window.__ModuleLoader__.load({
             try {
               const ids = groupItems.map((i) => i.sessionId);
               const result = await api(ctx, `${API_PREFIX}/purge-workspace`, { method: 'POST', body: { workspacePath, sessionIds: ids } });
-              const failedIds = new Set((result?.errors ?? []).map((e) => e.sessionId));
+              const failedIds = new Set(purgeFailures(result).map((e) => e.sessionId));
               const succeededIds = ids.filter((id) => !failedIds.has(id));
               purgeFromBrowserSessionStore(ctx, succeededIds);
               setConfirmModal(null);
@@ -864,6 +1212,279 @@ window.__ModuleLoader__.load({
         } finally {
           setPreviewLoading(false);
         }
+      };
+
+      /** Sub-session rows grouped for one card ('orphan:<id>' keys the kept shells). */
+      const childrenOf = (cardKey) => (childIndex ? (childIndex.groups[cardKey] ?? []) : null);
+
+      const orphanCards = childIndex?.orphans ?? [];
+
+      /** Opt-out set for one card: a child is checked unless the user cleared it. */
+      const uncheckedOf = (cardKey) => uncheckedChildren[cardKey];
+
+      const toggleChild = (cardKey, childId) => {
+        setUncheckedChildren((prev) => {
+          const current = new Set(prev[cardKey]);
+          if (current.has(childId)) current.delete(childId);
+          else current.add(childId);
+          return { ...prev, [cardKey]: current };
+        });
+      };
+
+      const forgetCardSelection = (cardKey) => {
+        setUncheckedChildren((prev) => {
+          if (!(cardKey in prev)) return prev;
+          const next = { ...prev };
+          delete next[cardKey];
+          return next;
+        });
+      };
+
+      const toggleCardChildren = (cardKey) => {
+        setExpandedCards((prev) => {
+          const next = new Set(prev);
+          if (next.has(cardKey)) next.delete(cardKey);
+          else next.add(cardKey);
+          return next;
+        });
+        // Fallback retry, once per id signature: a card whose grouping never
+        // arrived is the only reason to ask again, and one extra attempt is
+        // what keeps a broken route from becoming a retry storm.
+        const state = childRequestRef.current;
+        if (childIndex || state.retried === childSignature) return;
+        state.retried = childSignature;
+        loadChildGroups(childSignature);
+      };
+
+      const liveChildren = (children) => children.filter((child) => child.live);
+
+      /** Deletable (checked, not running) child ids of one card. */
+      const checkedChildIds = (cardKey, children) => {
+        const off = uncheckedOf(cardKey);
+        return children.filter((child) => !child.live && !off?.has(child.id)).map((child) => child.id);
+      };
+
+      /**
+       * Permanent delete of a card AND its checked sub-sessions.
+       *
+       * `parentIds` are the ROW ids to purge and the un-checked children travel
+       * as `excludeIds`: the host deletes each row plus all of its descendants
+       * minus `excludeIds`, so listing the children again would only make the
+       * two lists disagree. `parentCount` is what the dialog may call a main
+       * session (0 for a kept-children shell, whose rows ARE children).
+       */
+      const handlePurgeCard = (cardKey, parentIds, parentCount, parentSize, children) => {
+        if (parentIds.length === 0) {
+          // /purge rejects an empty sessionIds[] after the fact; say so before.
+          showToastLayer(t('childrenNoneSelected'));
+          return;
+        }
+        const running = liveChildren(children);
+        if (running.length > 0) {
+          // Refused here, before the request: the host refuses too, but only the
+          // panel can name WHICH sub-session is still running.
+          showToastLayer(t('childrenRunningBlocked', {
+            titles: running.map((child) => child.title || child.id).join(t('listSeparator')),
+          }));
+          return;
+        }
+        const doomed = children.filter((child) => !uncheckedOf(cardKey)?.has(child.id));
+        const kept = children.filter((child) => uncheckedOf(cardKey)?.has(child.id));
+        const size = (parentSize || 0) + doomed.reduce((sum, child) => sum + (child.fileSize || 0), 0);
+        setConfirmModal({
+          title: t('cascadeDeleteTitle'),
+          body: t('cascadeDeleteBody', {
+            parents: parentCount,
+            children: doomed.length,
+            size: formatFileSize(size),
+          }),
+          // A long cascade must not stretch the dialog past the viewport.
+          items: doomed.length > CASCADE_DIALOG_LIST_LIMIT ? doomed : null,
+          onConfirm: async () => {
+            try {
+              const result = await api(ctx, `${API_PREFIX}/purge`, {
+                method: 'POST',
+                body: { sessionIds: parentIds, excludeIds: kept.map((child) => child.id) },
+              });
+              const failures = purgeFailures(result);
+              if (failures.length > 0) {
+                showToastLayer(t('deleteFailed', { message: localizedError(failures[0]) }));
+              } else {
+                purgeFromBrowserSessionStore(ctx, parentIds);
+                showToastLayer(t('deleted'));
+              }
+              setConfirmModal(null);
+              // The hovered row is about to be unmounted, so its mouseleave can
+              // no longer close the card: do it here.
+              closeTooltip();
+              forgetCardSelection(cardKey);
+              setExpandedCards((prev) => {
+                const next = new Set(prev);
+                next.delete(cardKey);
+                return next;
+              });
+              loadItems();
+            } catch (err) {
+              showToastLayer(t('deleteFailed', { message: localizedError(err) }));
+            }
+          },
+        });
+      };
+
+      const childDisplayTitle = (child) => child.title || child.id;
+
+      /**
+       * "size · time" — each half dropped when the host reported null. A
+       * sub-session with no cached projection has no size to report, and
+       * printing 0 KB there would be a guess (same rule as the turn count).
+       */
+      const childMetaText = (child) => [
+        typeof child.fileSize === 'number' ? formatFileSize(child.fileSize) : null,
+        child.createdAt ? formatRelativeTime(child.createdAt) : null,
+      ].filter(Boolean).join(' · ');
+
+      /** The absolute timestamp the relative label replaced, kept in a tooltip. */
+      const childTimeTitle = (child) => (child.createdAt ? formatTime(child.createdAt) : '');
+
+      /**
+       * The full "size · timestamp" for the row's own tooltip: the narrow panel
+       * hides the meta line, and the data must not disappear with it.
+       */
+      const childMetaTitle = (child) => [
+        typeof child.fileSize === 'number' ? formatFileSize(child.fileSize) : null,
+        childTimeTitle(child) || null,
+      ].filter(Boolean).join(' · ');
+
+      /**
+       * Compact sub-session row: checkbox, title, running pill, size · age, and
+       * a 24px delete icon.
+       *
+       * The TITLE is the preview affordance (a real button, so it is reachable
+       * by Tab and Enter) instead of a standing "view" pill: the row's width
+       * budget at a 320px settings column cannot pay for a second text button,
+       * and a hover-only control would be unusable by keyboard and touch.
+       * Delete is an always-visible icon button for the same touch reason.
+       */
+      const renderChildRow = (cardKey, child) => h('div', {
+        key: child.id,
+        className: child.live ? 'dsh-trash-child dsh-trash-child--live' : 'dsh-trash-child',
+        title: childMetaTitle(child),
+      },
+        h('input', {
+          type: 'checkbox',
+          className: 'dsh-trash-checkbox dsh-trash-child-check',
+          checked: !child.live && !uncheckedOf(cardKey)?.has(child.id),
+          disabled: child.live,
+          'aria-label': childDisplayTitle(child),
+          title: child.live ? t('childrenRunningHint') : childDisplayTitle(child),
+          onChange: (e) => {
+            e.stopPropagation();
+            toggleChild(cardKey, child.id);
+          },
+        }),
+        h('button', {
+          type: 'button',
+          className: 'dsh-trash-child-title',
+          title: childDisplayTitle(child),
+          // The accessible name carries size and age as well: the narrow panel
+          // hides the meta LINE (display:none removes it from the a11y tree)
+          // and a tooltip is not readable by keyboard or screen reader. Keeping
+          // it here at EVERY width means one announcement path, not two.
+          'aria-label': [t('previewTitle', { title: childDisplayTitle(child) }), childMetaText(child)]
+            .filter(Boolean).join(' · '),
+          onClick: (e) => {
+            e.stopPropagation();
+            handleOpenPreview({ sessionId: child.id, title: childDisplayTitle(child) });
+          },
+        }, childDisplayTitle(child)),
+        child.live
+          ? h('span', { className: 'dsh-trash-child-live', title: t('childrenRunningHint') }, t('childrenRunning'))
+          : null,
+        // Visual only: the same size/age is in the title button's name above,
+        // so a screen reader must not hear it twice.
+        h('span', {
+          className: 'dsh-trash-child-meta',
+          'aria-hidden': 'true',
+          title: childTimeTitle(child),
+        }, childMetaText(child)),
+        // No restore for a sub-session: it never entered the recycle bin, so
+        // there is nothing to put back — only the permanent delete.
+        h('button', {
+          type: 'button',
+          className: 'dsh-trash-child-delete',
+          'aria-label': t('permanentlyDelete'),
+          title: t('permanentlyDelete'),
+          disabled: child.live,
+          onClick: (e) => {
+            e.stopPropagation();
+            if (child.live) return;
+            handlePurgeSingle(child.id, childDisplayTitle(child));
+          },
+        }, renderTrashIcon({ className: 'dsh-trash-child-delete-icon' }))
+      );
+
+      /**
+       * Full-width inline list under a card. `children === null` means the
+       * grouping has not arrived (or was dropped): two skeleton rows hold the
+       * exact height instead of the card jumping when the rows land.
+       */
+      const renderChildRegion = (cardKey, children) => {
+        const regionId = `dsh-trash-children-${cardKey}`;
+        if (children === null) {
+          return h('div', { key: `${cardKey}:children`, id: regionId, className: 'dsh-trash-children', role: 'group' },
+            h('div', { key: 'skeleton-1', className: 'dsh-trash-child dsh-trash-child--skeleton' }),
+            h('div', { key: 'skeleton-2', className: 'dsh-trash-child dsh-trash-child--skeleton' })
+          );
+        }
+        const showAll = fullChildLists.has(cardKey);
+        const shown = showAll ? children : children.slice(0, CHILD_ROW_LIMIT);
+        return h('div', { key: `${cardKey}:children`, id: regionId, className: 'dsh-trash-children', role: 'group' },
+          shown.length === 0
+            ? h('div', { key: 'empty', className: 'dsh-trash-children-empty' }, t('childrenEmpty'))
+            : shown.map((child) => renderChildRow(cardKey, child)),
+          children.length > shown.length
+            ? h('button', {
+                key: 'more',
+                type: 'button',
+                className: 'dsh-trash-children-more',
+                onClick: (e) => {
+                  e.stopPropagation();
+                  setFullChildLists((prev) => new Set(prev).add(cardKey));
+                },
+              }, t('childrenMore', { count: children.length - shown.length }))
+            : null
+        );
+      };
+
+      /**
+       * The badge IS the disclosure control: a button carrying
+       * aria-expanded/aria-controls, so Enter and Space work for free and Esc
+       * collapses. Rendered only when the count is known AND non-zero — an
+       * unknown or empty count renders nothing at all, as before this feature.
+       */
+      const renderChildBadge = (cardKey, count) => {
+        if (!count) return null;
+        const expanded = expandedCards.has(cardKey);
+        return h('button', {
+          type: 'button',
+          className: 'dsh-trash-badge dsh-trash-badge--children',
+          'aria-expanded': expanded ? 'true' : 'false',
+          'aria-controls': `dsh-trash-children-${cardKey}`,
+          'aria-label': t('childrenBadgeLabel', { count }),
+          title: t('childrenCount', { count }),
+          onClick: (e) => {
+            e.stopPropagation();
+            toggleCardChildren(cardKey);
+          },
+          onKeyDown: (e) => {
+            if (e.key !== 'Escape' || !expanded) return;
+            e.stopPropagation();
+            toggleCardChildren(cardKey);
+          },
+        },
+          renderChildrenIcon({ className: 'dsh-trash-icon-badge' }),
+          h('span', { className: 'dsh-trash-badge-num' }, String(count))
+        );
       };
 
       // 提取工作区下拉列表
@@ -1033,35 +1654,27 @@ window.__ModuleLoader__.load({
                   h('div', { className: 'dsh-trash-cards' },
                     group.items.map((item) => {
                       const displayTitle = currentTitle(item.sessionId, localizeServerFallback(item.title)) || item.sessionId;
-                      const path = item.cwd || item.workspacePath || '-';
                       const isChecked = selectedSessionIds.has(item.sessionId);
+                      const children = childrenOf(item.sessionId);
+                      const childCount = children ? children.length : 0;
+                      const childrenExpanded = expandedCards.has(item.sessionId);
 
-                      return h('div', {
-                        key: item.sessionId,
-                        className: isChecked ? 'dsh-trash-card dsh-trash-card--checked' : 'dsh-trash-card',
-                        onMouseEnter: (e) => {
-                          if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          hoverTimerRef.current = setTimeout(() => {
-                            setHoverTooltip({
-                              title: displayTitle,
-                              id: item.sessionId,
-                              path: path,
-                              x: rect.left,
-                              y: rect.top - 8,
-                            });
-                          }, 200);
+                      // The inline list is a SIBLING of the row, not a child of
+                      // it: it must span the whole card width, and a click
+                      // inside it must not be a click on the card.
+                      return [
+                        h('div', {
+                          key: item.sessionId,
+                          className: isChecked ? 'dsh-trash-card dsh-trash-card--checked' : 'dsh-trash-card',
                         },
-                        onMouseLeave: () => {
-                          if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-                          setHoverTooltip(null);
-                        },
-                      },
-                        // 微圆复选框
+                        // 微圆复选框：只选这一行本身，不通配它的子会话（子行的
+                        // 勾选是另一件事——级联删除的范围），所以两者必须能一眼分辨。
                         h('input', {
                           type: 'checkbox',
-                          className: 'dsh-trash-checkbox',
+                          className: 'dsh-trash-checkbox dsh-trash-checkbox--card',
                           checked: isChecked,
+                          'aria-label': t('selectSessionOnly'),
+                          title: t('selectSessionOnly'),
                           onChange: (e) => {
                             e.stopPropagation();
                             toggleSelectSession(item.sessionId);
@@ -1069,57 +1682,152 @@ window.__ModuleLoader__.load({
                         }),
 
                         h('div', { className: 'dsh-trash-card-main' },
-                          // Title
-                          h('div', { className: 'dsh-trash-card-title' }, displayTitle),
-                          // Metadata Row (时间, 轮数, 容量 Badge)
+                          // Title: the ONLY hover target that opens the info
+                          // card. The row itself must stay inert — hovering the
+                          // action buttons has to leave their own native
+                          // tooltips alone, and the meta row / badges / checkbox
+                          // are not what the card describes. The card anchors to
+                          // THIS box.
+                          h('div', {
+                            className: 'dsh-trash-card-title',
+                            onMouseEnter: (e) => {
+                              cancelTooltipClose();
+                              if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              hoverTimerRef.current = setTimeout(() => {
+                                hoverTimerRef.current = null;
+                                openTooltipFor(item, displayTitle, rect);
+                              }, TOOLTIP_OPEN_DELAY_MS);
+                            },
+                            // Delayed, not immediate: the pointer has to be
+                            // able to cross the gap onto the card itself.
+                            onMouseLeave: scheduleTooltipClose,
+                          }, displayTitle),
+                          // Metadata Row (时间, 轮数, 容量 Badge, 子会话 Badge)
                           h('div', { className: 'dsh-trash-card-meta' },
-                            h('span', { className: 'dsh-trash-card-meta-item' }, formatTime(item.archivedAt)),
+                            h('span', { className: 'dsh-trash-card-meta-item dsh-trash-card-meta-item--time' }, formatTime(item.archivedAt)),
                             // 轮数只有在投影缓存能给出「当前代际」记录时才显示。
                             // 为 null 表示未知（例如会话的检查点停留在升级前的
                             // 格式代际），此时宁可不显示，也不能谎报 0 轮。
                             typeof item.turnCount === 'number'
-                              ? h('span', { className: 'dsh-trash-card-meta-item' }, t('turnCount', { count: item.turnCount }))
+                              ? h('span', { className: 'dsh-trash-card-meta-item dsh-trash-card-meta-item--turns' }, t('turnCount', { count: item.turnCount }))
                               : null,
                             h('span', { className: 'dsh-trash-badge' },
                               renderDiskIcon({ className: 'dsh-trash-icon-badge' }),
                               formatFileSize(item.fileSize)
-                            )
+                            ),
+                            renderChildBadge(item.sessionId, childCount)
                           )
                         ),
 
-                        // Action Buttons (微型极简胶囊按钮，大幅留出左侧空间)
+                        // Action Buttons (微型极简胶囊按钮，大幅留出左侧空间)。
+                        // 文案包一层 span：窄容器里只隐藏文字、保留图标，因此每颗
+                        // 按钮都必须自带 aria-label/title，收起后仍有可访问名称。
                         h('div', { className: 'dsh-trash-card-actions' },
                           h('button', {
                             type: 'button',
                             className: 'dsh-trash-btn-ghost',
+                            'aria-label': t('view'),
+                            title: t('view'),
                             onClick: () => handleOpenPreview(item),
                           },
                             renderEyeIcon({ className: 'dsh-trash-icon-sm' }),
-                            t('view')
+                            h('span', { className: 'dsh-trash-btn-label' }, t('view'))
                           ),
                           h('button', {
                             type: 'button',
                             className: 'dsh-trash-btn-ghost',
+                            'aria-label': t('restore'),
+                            title: t('restore'),
                             onClick: () => handleUnarchive(item),
                           },
                             renderRestoreIcon({ className: 'dsh-trash-icon-sm' }),
-                            t('restore')
+                            h('span', { className: 'dsh-trash-btn-label' }, t('restore'))
                           ),
                           h('button', {
                             type: 'button',
                             className: 'dsh-trash-btn-danger-text',
-                            onClick: () => handlePurgeSingle(item.sessionId, displayTitle),
+                            'aria-label': t('permanentlyDelete'),
+                            title: t('permanentlyDelete'),
+                            onClick: () => (
+                              childCount > 0
+                                ? handlePurgeCard(item.sessionId, [item.sessionId], 1, item.fileSize, children)
+                                : handlePurgeSingle(item.sessionId, displayTitle)
+                            ),
                           },
                             renderTrashIcon({ className: 'dsh-trash-icon-sm' }),
-                            t('permanentlyDelete')
+                            h('span', { className: 'dsh-trash-btn-label' }, t('permanentlyDelete'))
                           )
                         )
-                      );
+                        ),
+                        childrenExpanded ? renderChildRegion(item.sessionId, children) : null,
+                      ];
                     })
                   )
                 );
               })
             ),
+
+        // Kept sub-sessions of an already-deleted main session. They never
+        // entered the recycle bin, so there is nothing to restore — only to
+        // view and to delete. The next /children answer drops the shell once
+        // its last child is gone.
+        orphanCards.length > 0 && h('div', { className: 'dsh-trash-cards' },
+          orphanCards.map((group) => {
+            const cardKey = `orphan:${group.parentId}`;
+            const expanded = expandedCards.has(cardKey);
+            return [
+              h('div', { key: cardKey, className: 'dsh-trash-card dsh-trash-card--orphan' },
+                h('div', { className: 'dsh-trash-card-main' },
+                  h('div', { className: 'dsh-trash-card-title' }, t('orphanCardTitle', { count: group.children.length })),
+                  // No timestamp and no size of its own: the MAIN session is
+                  // gone, so anything shown here would be the children's data
+                  // wearing the parent's label.
+                  h('div', { className: 'dsh-trash-card-meta' },
+                    h('span', { className: 'dsh-trash-tag-kept' }, t('orphanKept')),
+                    renderChildBadge(cardKey, group.children.length)
+                  )
+                ),
+                h('div', { className: 'dsh-trash-card-actions' },
+                  // "View" is the first kept child: the parent that used to own
+                  // this row no longer exists to preview.
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-trash-btn-ghost',
+                    'aria-label': t('view'),
+                    title: t('view'),
+                    onClick: () => handleOpenPreview({
+                      sessionId: group.children[0].id,
+                      title: childDisplayTitle(group.children[0]),
+                    }),
+                  },
+                    renderEyeIcon({ className: 'dsh-trash-icon-sm' }),
+                    h('span', { className: 'dsh-trash-btn-label' }, t('view'))
+                  ),
+                  // Batch delete of the checked kept children: the deleted
+                  // parent cannot cascade for them, so they are the row ids.
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-trash-btn-danger-text',
+                    'aria-label': t('permanentlyDelete'),
+                    title: t('permanentlyDelete'),
+                    onClick: () => handlePurgeCard(
+                      cardKey,
+                      checkedChildIds(cardKey, group.children),
+                      0,
+                      group.children.reduce((sum, child) => sum + (child.fileSize || 0), 0),
+                      group.children
+                    ),
+                  },
+                    renderTrashIcon({ className: 'dsh-trash-icon-sm' }),
+                    h('span', { className: 'dsh-trash-btn-label' }, t('permanentlyDelete'))
+                  )
+                )
+              ),
+              expanded ? renderChildRegion(cardKey, group.children) : null,
+            ];
+          })
+        ),
 
         // Footer Summary
         items.length > 0 && h('div', { className: 'dsh-trash-footer' }, t('archivedCount', { count: items.length })),
@@ -1161,6 +1869,16 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dsh-trash-modal', onClick: (e) => e.stopPropagation() },
               h('h3', { className: 'dsh-trash-modal-title' }, confirmModal.title),
               h('p', { className: 'dsh-trash-modal-body' }, confirmModal.body),
+              // A long cascade names what it will erase; past the limit the list
+              // scrolls inside the dialog instead of growing it.
+              confirmModal.items &&
+                h('div', { className: 'dsh-trash-modal-list' },
+                  confirmModal.items.map((child) => h('div', {
+                    key: child.id,
+                    className: 'dsh-trash-modal-list-item',
+                    title: childDisplayTitle(child),
+                  }, childDisplayTitle(child)))
+                ),
               h('div', { className: 'dsh-trash-modal-actions' },
                 h('button', { className: 'dsh-trash-btn-cancel', onClick: () => setConfirmModal(null) }, t('cancel')),
                 h('button', { className: 'dsh-trash-btn-confirm', onClick: confirmModal.onConfirm }, t('confirmDelete'))
@@ -1168,15 +1886,28 @@ window.__ModuleLoader__.load({
             )
           ),
 
-        // Tooltip: 悬停展示全标题 & ID & 路径（left/top 由 JS 按鼠标位置内联给出）
+        // Hover info card: full title, id, and the session's log path on disk.
+        // Anchored to the TITLE (left/top computed in JS), not to the pointer,
+        // so it can be read, selected and clicked.
         hoverTooltip &&
           h('div', {
-            className: 'dsh-trash-tooltip',
-            style: { left: `${hoverTooltip.x}px`, top: `${hoverTooltip.y}px` },
+            ref: tooltipRef,
+            className: `dsh-trash-tooltip dsh-trash-tooltip--${hoverTooltip.placement}`,
+            style: { left: `${hoverTooltip.left}px`, top: `${hoverTooltip.top}px` },
+            onMouseEnter: cancelTooltipClose,
+            onMouseLeave: scheduleTooltipClose,
           },
             h('div', { className: 'dsh-trash-tooltip-title' }, hoverTooltip.title),
             h('div', { className: 'dsh-trash-tooltip-sub' }, `ID: ${hoverTooltip.id}`),
-            h('div', { className: 'dsh-trash-tooltip-sub' }, t('path', { path: hoverTooltip.path }))
+            // No log on disk -> no row at all (never an empty or "not found"
+            // placeholder). The project path is already in the group header
+            // above the card, so it is not repeated here.
+            hoverTooltip.logPath
+              ? h('div', {
+                  className: 'dsh-trash-tooltip-sub',
+                  title: hoverTooltip.logPath,
+                }, t('storagePath', { path: abbreviateHomePath(hoverTooltip.logPath) }))
+              : null
           )
       );
     }

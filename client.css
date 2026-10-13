@@ -41,7 +41,12 @@
   --dstrb-text-strong: #1a202c;
   --dstrb-text: #2d3748;
   --dstrb-text-secondary: #4a5568;
-  --dstrb-text-muted: #718096;
+  /* #718096 measured 4.02:1 on the card surface and 3.83:1 on the subtle
+     surface (badges) — under the 4.5:1 text bar for the small labels that use
+     it. #5f6b7a clears it everywhere it lands: 5.43 on surface, 5.18 on
+     surface-subtle, 4.82 on surface-hover (the hovered badge), while staying
+     visibly weaker than --dstrb-text (11.99) and --dstrb-text-secondary (7.53). */
+  --dstrb-text-muted: #5f6b7a;
   --dstrb-text-faint: #a0aec0;
 
   /* Accents */
@@ -62,6 +67,12 @@
   --dstrb-border: #e2e8f0;
   --dstrb-border-light: #edf2f7;
   --dstrb-border-hairline: #f0f4f8;
+
+  /* Structural lines that must stay IDENTIFIABLE, not decorative: WCAG 1.4.11
+     wants >= 3:1 from the boundary that carries the hierarchy — the default
+     borders sit at ~1.1:1, so the nesting cue uses this token instead.
+     #64748b on the light card surface (#ffffff) = 4.76:1. */
+  --dstrb-structure: #64748b;
 
   /* Veils & overlays */
   --dstrb-veil: rgba(0, 0, 0, 0.06);
@@ -122,6 +133,9 @@
     --dstrb-border-light: #333c4e;
     --dstrb-border-hairline: #2c3444;
 
+  /* Same >=3:1 rule on the dark card surface (#1f2530): #8a97a8 = 5.18:1. */
+  --dstrb-structure: #8a97a8;
+
     --dstrb-veil: rgba(255, 255, 255, 0.08);
     --dstrb-overlay: rgba(0, 0, 0, 0.65);
 
@@ -181,6 +195,9 @@ body[data-ds-dark-theme] {
   --dstrb-border-light: #333c4e;
   --dstrb-border-hairline: #2c3444;
 
+  /* Same >=3:1 rule on the dark card surface (#1f2530): #8a97a8 = 5.18:1. */
+  --dstrb-structure: #8a97a8;
+
   --dstrb-veil: rgba(255, 255, 255, 0.08);
   --dstrb-overlay: rgba(0, 0, 0, 0.65);
 
@@ -220,7 +237,12 @@ body:not([data-ds-dark-theme]) {
   --dstrb-text-strong: #1a202c;
   --dstrb-text: #2d3748;
   --dstrb-text-secondary: #4a5568;
-  --dstrb-text-muted: #718096;
+  /* #718096 measured 4.02:1 on the card surface and 3.83:1 on the subtle
+     surface (badges) — under the 4.5:1 text bar for the small labels that use
+     it. #5f6b7a clears it everywhere it lands: 5.43 on surface, 5.18 on
+     surface-subtle, 4.82 on surface-hover (the hovered badge), while staying
+     visibly weaker than --dstrb-text (11.99) and --dstrb-text-secondary (7.53). */
+  --dstrb-text-muted: #5f6b7a;
   --dstrb-text-faint: #a0aec0;
 
   /* Accents */
@@ -241,6 +263,12 @@ body:not([data-ds-dark-theme]) {
   --dstrb-border: #e2e8f0;
   --dstrb-border-light: #edf2f7;
   --dstrb-border-hairline: #f0f4f8;
+
+  /* Structural lines that must stay IDENTIFIABLE, not decorative: WCAG 1.4.11
+     wants >= 3:1 from the boundary that carries the hierarchy — the default
+     borders sit at ~1.1:1, so the nesting cue uses this token instead.
+     #64748b on the light card surface (#ffffff) = 4.76:1. */
+  --dstrb-structure: #64748b;
 
   /* Veils & overlays */
   --dstrb-veil: rgba(0, 0, 0, 0.06);
@@ -394,7 +422,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 }
 
 .dsh-trash-search-input::placeholder {
-  color: var(--dstrb-text-faint);
+  color: var(--dstrb-text-muted);
 }
 
 .dsh-trash-search-input:focus {
@@ -407,12 +435,24 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 /*  Filter toolbar                                                     */
 /* ------------------------------------------------------------------ */
 
+/* Flex-wrap rather than `1fr 1fr auto`: a `1fr` grid track refuses to shrink
+   below its longest option, so at a 320px settings column the toolbar pushed
+   itself 6px past the panel. The controls now wrap instead of spilling. */
 .dsh-trash-toolbar {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   align-items: center;
   margin-bottom: 20px;
+}
+
+.dsh-trash-toolbar > .dsh-trash-select {
+  flex: 1 1 120px;
+  min-width: 0;
+}
+
+.dsh-trash-toolbar > .dsh-trash-btn-danger-outline {
+  flex: 0 0 auto;
 }
 
 .dsh-trash-select {
@@ -463,7 +503,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 .dsh-trash-state {
   padding: 40px 0;
   text-align: center;
-  color: var(--dstrb-text-faint);
+  color: var(--dstrb-text-muted);
   font-size: 14px;
 }
 
@@ -512,7 +552,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 
 .dsh-trash-group-path {
   font-size: 11px;
-  color: var(--dstrb-text-faint);
+  color: var(--dstrb-text-muted);
   font-family: var(--dstrb-mono, var(--ds-font-family-code, var(--dstrb-mono-fallback)));
   margin-left: 4px;
   overflow: hidden;
@@ -530,7 +570,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 
 .dsh-trash-group-count {
   font-size: 12px;
-  color: var(--dstrb-text-faint);
+  color: var(--dstrb-text-muted);
 }
 
 .dsh-trash-more-wrap {
@@ -540,7 +580,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 .dsh-trash-more-btn {
   background: none;
   border: none;
-  color: var(--dstrb-text-faint);
+  color: var(--dstrb-text-muted);
   font-size: 14px;
   cursor: pointer;
   padding: 2px 6px;
@@ -596,16 +636,24 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
   border: 1px solid var(--dstrb-border-light);
   overflow: hidden;
   box-shadow: var(--dstrb-shadow-card);
+  /* Query container for the narrow-panel rules below: the panel sits inside
+     the settings column, so its own width — not the viewport — decides what
+     the meta row can still show. */
+  container-type: inline-size;
 }
 
+/* ONE geometry at every width. A per-width padding/gap (plus a label that
+   reappears once the container grows) makes the title NARROWER on a wider
+   panel — a 400px list showed a 97px title while a 310px one showed 178px.
+   With the row's fixed costs constant, the title grows 1:1 with the panel. */
 .dsh-trash-card {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 14px 20px;
+  padding: 12px 10px;
   border-bottom: 1px solid var(--dstrb-border-hairline);
   transition: background-color 0.15s ease;
-  gap: 16px;
+  gap: 4px;
 }
 
 .dsh-trash-card--checked {
@@ -621,6 +669,13 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
   accent-color: var(--dstrb-accent);
   margin-right: 8px;
   flex-shrink: 0;
+}
+
+/* The row gap already separates the card checkbox; an extra margin would come
+   straight out of the title's width. Declared AFTER the shared rule: same
+   specificity, so source order decides. */
+.dsh-trash-checkbox--card {
+  margin-right: 0;
 }
 
 .dsh-trash-card-main {
@@ -653,6 +708,12 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 
 .dsh-trash-card-meta-item {
   white-space: nowrap;
+  /* An item wider than the wrapping line must yield, not spill: without this a
+     squeezed card clips the timestamp by a couple of pixels inside its own
+     column (scrollWidth > clientWidth). */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dsh-trash-badge {
@@ -667,24 +728,86 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
   align-items: center;
 }
 
+/* Sub-session badge: same box as the size badge, but it discloses the inline
+   list, so it is a real button rather than a label. No font-size of its own —
+   it inherits the badge's, which keeps both badges the same size. */
+.dsh-trash-badge--children {
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.dsh-trash-badge--children:hover {
+  background-color: var(--dstrb-surface-hover);
+  border-color: var(--dstrb-text-faint);
+}
+
+/* The open state is carried by the accent border and icon; the COUNT is 11px
+   text, and --dstrb-accent on the accent veil measures 3.22:1 — under the
+   4.5:1 text bar this count already had to meet. */
+.dsh-trash-badge--children[aria-expanded="true"] {
+  background-color: var(--dstrb-accent-veil);
+  border-color: var(--dstrb-accent);
+  color: var(--dstrb-text-strong);
+}
+
+.dsh-trash-badge--children[aria-expanded="true"] .dsh-trash-icon-badge {
+  color: var(--dstrb-accent);
+}
+
+.dsh-trash-badge--children:focus-visible {
+  outline: 2px solid var(--dstrb-accent);
+  outline-offset: 1px;
+}
+
+/* A reserved slot with tabular figures: the count is backfilled asynchronously,
+   so its digits must not resize the badge and shift the row under it. */
+.dsh-trash-badge-num {
+  min-width: 1.6em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .dsh-trash-card-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  /* Icon-only buttons need less air than labelled pills; the width they give up
+     belongs to the title. */
+  gap: 4px;
   flex-shrink: 0;
+}
+
+/* The action LABELS are hidden at every width, not just on a narrow panel.
+   Re-showing them once the container grows is what made a wider panel show a
+   narrower title: a label costs ~123px, so the title would drop by that much
+   the moment they come back. The icons keep a full accessible name
+   (aria-label + title), which is the state P0-4 asks for on a narrow panel.
+   To trade this back, show .dsh-trash-btn-label under an @container rule and
+   accept that the title then steps DOWN at that width. */
+.dsh-trash-btn-label {
+  display: none;
+}
+
+.dsh-trash-btn-ghost .dsh-trash-icon-sm,
+.dsh-trash-btn-danger-text .dsh-trash-icon-sm {
+  margin-right: 0;
 }
 
 .dsh-trash-btn-ghost {
   background-color: var(--dstrb-surface-subtle);
   color: var(--dstrb-text-secondary);
   border: 1px solid var(--dstrb-border);
-  padding: 3px 9px;
+  padding: 4px 5px;
   border-radius: 12px;
   font-size: 11px;
   font-weight: 500;
   font-family: inherit;
   display: inline-flex;
   align-items: center;
+  /* WCAG 2.5.8: an icon-only action keeps a >=24x24 target. */
+  min-width: 24px;
+  min-height: 24px;
+  justify-content: center;
   cursor: pointer;
   transition: all 0.12s ease;
   white-space: nowrap;
@@ -699,13 +822,17 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
   background-color: transparent;
   color: var(--dstrb-danger);
   border: none;
-  padding: 3px 6px;
+  padding: 4px 5px;
   border-radius: 12px;
   font-size: 11px;
   font-weight: 500;
   font-family: inherit;
   display: inline-flex;
   align-items: center;
+  /* WCAG 2.5.8: an icon-only action keeps a >=24x24 target. */
+  min-width: 24px;
+  min-height: 24px;
+  justify-content: center;
   cursor: pointer;
   transition: all 0.12s ease;
   white-space: nowrap;
@@ -716,35 +843,277 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 }
 
 /* ------------------------------------------------------------------ */
-/*  Hover tooltip (position left/top set inline by JS)                 */
+/*  Sub-session rows — full-width inline list under a card            */
 /* ------------------------------------------------------------------ */
 
+/* Sits between two cards of the list, so it owns the hairline separator the
+   card would otherwise paint. The nesting cue is the RAIL, not a background
+   tint: a tint cannot carry a boundary (a subtle fill is ~1.05:1 against the
+   card by construction), so the hierarchy hangs on a line that meets the
+   >=3:1 non-text contrast bar in both themes — see --dstrb-structure.
+   24px = the card's 10px padding + the 2px rail + the 12px indent. */
+.dsh-trash-children {
+  position: relative;
+  padding: 6px 10px 10px 24px;
+  background-color: transparent;
+  border-bottom: 1px solid var(--dstrb-border-hairline);
+}
+
+.dsh-trash-children::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 6px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 1px;
+  background-color: var(--dstrb-structure);
+}
+
+.dsh-trash-child {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  font-size: 0.92em;
+  color: var(--dstrb-text-secondary);
+}
+
+.dsh-trash-child--live {
+  /* No row-level opacity: fading the whole row drags the TITLE down with it
+     (2.81:1, below the 4.5:1 text bar). The running state is carried by the
+     pill plus a danger tint, and only the periphery is dimmed — below. */
+  background-color: var(--dstrb-danger-veil);
+  border-radius: 6px;
+  cursor: not-allowed;
+}
+
+.dsh-trash-child--live .dsh-trash-child-check,
+.dsh-trash-child--live .dsh-trash-child-meta,
+.dsh-trash-child--live .dsh-trash-child-delete {
+  opacity: 0.55;
+}
+
+.dsh-trash-child-check {
+  /* Smaller and muted next to the card's own checkbox: this one scopes a
+     cascade delete, that one picks sessions for a batch action. */
+  width: 13px;
+  height: 13px;
+  margin-right: 0;
+  accent-color: var(--dstrb-text-faint);
+}
+
+/* The title is the preview control (a real button), so it needs button
+   resets; it also has to outrank the meta line for the row's width. */
+.dsh-trash-child-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dsh-trash-child-title:hover {
+  color: var(--dstrb-text);
+  text-decoration: underline;
+}
+
+.dsh-trash-child-title:focus-visible {
+  outline: 2px solid var(--dstrb-accent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+.dsh-trash-child-meta {
+  /* Shrinkable, so the title keeps its room: this is the first thing to give
+     way when the panel narrows. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dstrb-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.dsh-trash-child-live {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--dstrb-danger-border);
+  background-color: var(--dstrb-surface);
+  color: var(--dstrb-danger);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+/* A 24x24 icon button, always visible: a hover-only affordance does not exist
+   on touch, and WCAG 2.5.8 asks for a >=24px target. */
+.dsh-trash-child-delete {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--dstrb-danger);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.dsh-trash-child-delete:hover {
+  background-color: var(--dstrb-danger-veil);
+}
+
+.dsh-trash-child-delete:focus-visible {
+  outline: 2px solid var(--dstrb-accent);
+  outline-offset: 1px;
+}
+
+.dsh-trash-child-delete:disabled {
+  cursor: not-allowed;
+}
+
+.dsh-trash-child-delete-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 0;
+}
+
+/* Two placeholder rows: the grouping is fetched after the list paints, so an
+   expanded card holds its height instead of jumping when the rows arrive. */
+.dsh-trash-child--skeleton {
+  border-radius: 6px;
+  background-color: var(--dstrb-veil);
+  margin: 3px 0;
+}
+
+.dsh-trash-children-more {
+  display: block;
+  width: 100%;
+  padding: 4px 0 0;
+  border: none;
+  background: none;
+  color: var(--dstrb-accent);
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dsh-trash-children-empty {
+  padding: 4px 0;
+  color: var(--dstrb-text-muted);
+}
+
+/* ── Narrow panel ───────────────────────────────────────────────────
+   The container is the card list, so these fire on the panel's own width.
+   Priority is fixed: the turn count goes first, the timestamp second, then the
+   action LABELS (the icons stay — they keep their aria-label/title), and the
+   sub-session age last. The size badge and the sub-session badge are never
+   hidden: they are counts the row exists to show. */
+@container (max-width: 360px) {
+  .dsh-trash-card-meta-item--turns {
+    display: none;
+  }
+
+  /* Title first: the age gives way instead of squeezing the name. The row's
+     size and age stay in the TITLE BUTTON's accessible name, which is never
+     hidden — `display: none` here would drop them out of the accessibility
+     tree entirely, and a tooltip is not readable by keyboard or screen
+     reader. */
+  .dsh-trash-child-meta {
+    display: none;
+  }
+}
+
+@container (max-width: 320px) {
+  .dsh-trash-card-meta-item--time {
+    display: none;
+  }
+}
+
+/* Kept sub-sessions of a main session that is already gone: no restore is
+   offered for them, so the row reads as a bin shell, not as a card. */
+.dsh-trash-card--orphan {
+  background-color: var(--dstrb-surface-subtle);
+}
+
+.dsh-trash-tag-kept {
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--dstrb-border);
+  background-color: var(--dstrb-surface);
+  color: var(--dstrb-text-muted);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Hover info card (left/top set inline by JS, from the hovered TITLE) */
+/* ------------------------------------------------------------------ */
+/*
+ * Deliberately NOT the host tooltip language. `.dsh-trash-tooltip-host` is a
+ * short hint ON a button and follows the app's own tooltip tokens
+ * (--dsw-alias-tooltip-*), which are a DARK bubble in both themes — the host's
+ * choice for one-line hints. This card is a small PANEL of the recycle bin that
+ * the user reads and selects text from, so it is painted with the plugin's own
+ * theme surface: white in the light theme, #1f2530 in the dark one, like every
+ * other surface of this panel. The boundary uses the structure token
+ * (4.76:1 light / 5.18:1 dark), not a hairline.
+ */
 .dsh-trash-tooltip {
   position: fixed;
-  transform: translateY(-100%);
-  background-color: var(--dstrb-tooltip-bg);
-  color: var(--dstrb-tooltip-text);
-  padding: 10px 14px;
-  border-radius: 8px;
-  box-shadow: var(--dstrb-shadow-tooltip);
-  pointer-events: none;
   z-index: 20000;
-  max-width: 380px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  max-width: min(380px, 92vw);
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--dstrb-surface);
+  color: var(--dstrb-text-strong);
+  /* The boundary is a real boundary, so it uses the structure token (>=3:1)
+     rather than a hairline that only reads as a smudge; the elevation shadow
+     underneath carries the same message. */
+  border: 1px solid var(--dstrb-structure);
+  box-shadow: var(--dstrb-shadow-tooltip);
+  /* Readable and selectable: the card is content, not a decoration. */
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Placement is decided in JS from the measured box; the transform only flips
+   the card to the row's other side. */
+.dsh-trash-tooltip--above {
+  transform: translateY(-100%);
+}
+
+.dsh-trash-tooltip--below {
+  transform: none;
 }
 
 .dsh-trash-tooltip-title {
-  font-size: 13px;
+  font-size: 1em;
   font-weight: 600;
-  color: var(--dstrb-tooltip-text);
+  color: inherit;
   word-break: break-all;
 }
 
 .dsh-trash-tooltip-sub {
-  font-size: 11px;
-  color: var(--dstrb-tooltip-muted);
+  font-size: 0.86em;
+  color: var(--dstrb-text-muted);
   font-family: var(--dstrb-mono, var(--ds-font-family-code, var(--dstrb-mono-fallback)));
   word-break: break-all;
 }
@@ -756,7 +1125,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 .dsh-trash-footer {
   margin-top: 24px;
   font-size: 12px;
-  color: var(--dstrb-text-faint);
+  color: var(--dstrb-text-muted);
   text-align: right;
 }
 
@@ -810,7 +1179,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
   background: none;
   border: none;
   font-size: 18px;
-  color: var(--dstrb-text-faint);
+  color: var(--dstrb-text-muted);
   cursor: pointer;
   padding: 4px 8px;
 }
@@ -832,7 +1201,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 .dsh-trash-preview-state {
   text-align: center;
   padding: 30px;
-  color: var(--dstrb-text-faint);
+  color: var(--dstrb-text-muted);
 }
 
 .dsh-trash-modal {
@@ -856,6 +1225,26 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
   font-size: 14px;
   color: var(--dstrb-text-secondary);
   line-height: 1.5;
+}
+
+/* The cascade dialog names every sub-session it will erase; past a handful the
+   list scrolls inside the dialog rather than growing it. */
+.dsh-trash-modal-list {
+  margin: -8px 0 20px 0;
+  padding: 6px 10px;
+  max-height: 40vh;
+  overflow-y: auto;
+  border: 1px solid var(--dstrb-border-light);
+  border-radius: 8px;
+  background-color: var(--dstrb-surface-subtle);
+}
+
+.dsh-trash-modal-list-item {
+  color: var(--dstrb-text-secondary);
+  line-height: 1.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dsh-trash-modal-actions {
@@ -917,7 +1306,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
 }
 
 .dsh-trash-message-time {
-  color: var(--dstrb-text-faint);
+  color: var(--dstrb-text-muted);
 }
 
 .dsh-trash-bubble-user {
@@ -1173,7 +1562,7 @@ body:not([data-ds-dark-theme]) .dsh-trash-container { color-scheme: light; }
   border-radius: 7px;
   line-height: 1;
   cursor: pointer;
-  color: var(--dsw-alias-label-tertiary, var(--dstrb-text-faint));
+  color: var(--dsw-alias-label-tertiary, var(--dstrb-text-muted));
   opacity: 0.85;
   transition: color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
 }
