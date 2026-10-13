@@ -124,6 +124,7 @@ describe('Session Trash Host HTTP Routes', () => {
     const paths = routes.map((r) => r.path).sort();
     assert.deepStrictEqual(paths, [
       '/api/session-trash/archive',
+      '/api/session-trash/children',
       '/api/session-trash/client.css',
       '/api/session-trash/empty',
       '/api/session-trash/list',

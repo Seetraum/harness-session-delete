@@ -15,7 +15,7 @@
  * This plugin patches the existing services at init time. It is designed
  * to be loaded via cordis.patch.yml and works with the compiled DSH packages.
  */
-import { rm, readdir, rmdir, stat, readFile } from 'node:fs/promises';
+import { rm, readdir, rmdir, stat, readFile, open as openFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -438,6 +438,420 @@ function patchProjectionCacheRemove(cache) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Sub-session lineage: child enumeration and cascade deletion        */
+/* ------------------------------------------------------------------ */
+/*
+ * A subagent session is a SIBLING directory of the session that spawned it
+ * (~/.dsh/sessions/<project>/<childId>/) and its id NEVER enters the workspace
+ * registry — record.sessionIds holds root sessions only. The parent link lives
+ * in the child's own header (`origin: "subagent"`, `parentSession`,
+ * `delegationDepth`) and nowhere else, so every fact below is derived from that
+ * header. A store that cannot be enumerated degrades to "no children" instead
+ * of failing the request: a missing badge beats a wrong one.
+ */
+
+/** Log names inside one session directory (legacy plain + 0.1.5 generations). */
+const SESSION_LOG_FILE = /^session(?:\.v\d+)?\.jsonl(?:\.zstd)?$/;
+
+/**
+ * Is this session's agent working right now? The ONLY liveness witness this
+ * bundle trusts: `session.lock` outlives the session that wrote it, so its
+ * presence proves nothing, while the agents registry drops an entry once the
+ * session unloads. An absent entry is a session that is simply not loaded.
+ * @param {import('@deepseek-ai/cordis').Context} ctx
+ * @param {string} sessionId
+ * @returns {boolean}
+ */
+function isSessionLive(ctx, sessionId) {
+  const agents = ctx.get('agents');
+  const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined;
+  return agent !== undefined && agent.status !== 'idle';
+}
+
+/** Keep the non-empty string ids a request body may carry. */
+function normalizeSessionIds(value) {
+  return Array.isArray(value) ? value.filter((id) => typeof id === 'string' && id) : [];
+}
+
+/**
+ * One lineage index entry: the parent link the cascade walks, plus the header
+ * the display facts are read from.
+ * @param {object|undefined} item a listing record — the header itself, a
+ *   0.1.5 snapshot wrapping it, or a sessionQuery record whose `header` holds it.
+ * @returns {{id: string, parentSession: string|undefined, delegationDepth: number,
+ *            header: object, sizeBytes: number|undefined, logPath: string|undefined}|undefined}
+ */
+function toLineageEntry(item) {
+  const header = item?.header && typeof item.header.id === 'string' ? item.header : item;
+  if (!header || typeof header.id !== 'string') return undefined;
+  const size = typeof item.sizeBytes === 'number' ? item.sizeBytes
+    : (typeof header.sizeBytes === 'number' ? header.sizeBytes : undefined);
+  const parentSession = typeof header.parentSession === 'string' && header.parentSession
+    ? header.parentSession
+    : undefined;
+  // A session that names a parent is at least depth 1; 0 would claim it is a
+  // root session, and the panel renders this number.
+  const delegationDepth = Number.isFinite(header.delegationDepth) ? header.delegationDepth : (parentSession ? 1 : 0);
+  return {
+    id: header.id,
+    parentSession,
+    delegationDepth,
+    header,
+    sizeBytes: size,
+    // Only the physical rung knows the path up front; carrying it saves the
+    // size fallback a second resolution round.
+    logPath: typeof item.logPath === 'string' ? item.logPath : undefined,
+  };
+}
+
+function indexLineage(items) {
+  const entries = new Map();
+  for (const item of items) {
+    const entry = toLineageEntry(item);
+    if (entry) entries.set(entry.id, entry);
+  }
+  return entries;
+}
+
+/** The header inside an inspect()/read() result, across cohort shapes. */
+function firstHeader(result) {
+  const candidate = result?.header ?? (Array.isArray(result?.events) ? result.events[0] : undefined);
+  return candidate && typeof candidate.id === 'string' ? candidate : undefined;
+}
+
+/**
+ * Read one session's header record. The decode rides the existing header
+ * convention (persistence.inspect → open(id, 'read')) because a .zstd log
+ * cannot be read as text; an uncompressed log is read directly, bounded to its
+ * first line.
+ * @returns {Promise<object|undefined>} the stored header record.
+ */
+async function readSessionHeaderRecord(persistence, sessionId, logPath) {
+  try {
+    if (typeof persistence?.inspect === 'function') {
+      const header = firstHeader(await persistence.inspect(sessionId));
+      if (header) return header;
+    }
+  } catch { /* the handle API is the next rung */ }
+
+  try {
+    if (typeof persistence?.open === 'function') {
+      const handle = await persistence.open(sessionId, 'read');
+      try {
+        const header = firstHeader(await handle.read());
+        if (header) return header;
+      } finally {
+        if (typeof handle?.close === 'function') await handle.close().catch(() => {});
+      }
+    }
+  } catch { /* an uncompressed log is still readable below */ }
+
+  if (logPath.endsWith('.zstd')) return undefined;
+  try {
+    const handle = await openFile(logPath, 'r');
+    try {
+      const buffer = Buffer.alloc(64 * 1024);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const parsed = JSON.parse(buffer.subarray(0, bytesRead).toString('utf8').split('\n', 1)[0]);
+      return parsed && typeof parsed === 'object' ? parsed : undefined;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Physical fallback rung: enumerate ~/.dsh/sessions/<project>/<sessionId>/ and
+ * read each session's first record. A directory whose header stays unreadable
+ * still ENTERS the index under its directory name — it is a session with a log
+ * on disk, and that is exactly what decides whether a child's parent is a live
+ * row or an orphan.
+ * @returns {Promise<Array|undefined>} listing items, or undefined when the
+ *   session store itself cannot be listed.
+ */
+async function scanSessionDirectories(persistence) {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  if (!home) return undefined;
+  const root = join(home, '.dsh', 'sessions');
+  let projects;
+  try {
+    projects = await readdir(root);
+  } catch {
+    return undefined;
+  }
+  const items = [];
+  for (const project of projects) {
+    const projectDir = join(root, project);
+    for (const sessionId of await readdir(projectDir).catch(() => [])) {
+      const sessionDir = join(projectDir, sessionId);
+      const names = await readdir(sessionDir).catch(() => []);
+      const logName = names.find((name) => SESSION_LOG_FILE.test(name));
+      if (!logName) continue;
+      const logPath = join(sessionDir, logName);
+      const read = await readSessionHeaderRecord(persistence, sessionId, logPath);
+      const header = read && typeof read.id === 'string' ? read : { id: sessionId };
+      const sizeBytes = await stat(logPath).then((s) => s.size).catch(() => undefined);
+      items.push({ header, sizeBytes, logPath });
+    }
+  }
+  return items;
+}
+
+/**
+ * Index every stored session by id, walking the cohort ladder:
+ * sessionQuery.listSessions() → persistence.list() → physical scan. Only a rung
+ * that THROWS is skipped; `degraded` therefore means every rung threw, and the
+ * caller reports empty groups rather than guessing.
+ * @returns {Promise<{entries: Map<string, object>, degraded: boolean}>}
+ */
+async function collectLineage(ctx, persistence) {
+  const query = ctx.get('sessionQuery');
+  if (typeof query?.listSessions === 'function') {
+    try {
+      const records = await query.listSessions();
+      if (Array.isArray(records)) return { entries: indexLineage(records), degraded: false };
+    } catch { /* the listing below is the next rung */ }
+  }
+  try {
+    const listed = await persistence?.list?.();
+    if (Array.isArray(listed)) return { entries: indexLineage(listed), degraded: false };
+  } catch { /* the physical scan below is the last rung */ }
+  const scanned = await scanSessionDirectories(persistence);
+  if (scanned) return { entries: indexLineage(scanned), degraded: false };
+  return { entries: new Map(), degraded: true };
+}
+
+function descendantId(value) {
+  if (typeof value === 'string') return value;
+  if (typeof value?.id === 'string') return value.id;
+  if (typeof value?.header?.id === 'string') return value.header.id;
+  return undefined;
+}
+
+/**
+ * Every descendant id of one session, at FULL depth, excluding the session
+ * itself. sessionQuery.traceSession owns the walk when it exists (it also
+ * answers for a missing ancestor); otherwise the header index is walked
+ * recursively.
+ * @returns {Promise<string[]>}
+ */
+async function collectDescendantIds(ctx, persistence, sessionId) {
+  const query = ctx.get('sessionQuery');
+  if (typeof query?.traceSession === 'function') {
+    try {
+      const trace = await query.traceSession(sessionId);
+      if (Array.isArray(trace?.descendants)) {
+        const ids = trace.descendants.map(descendantId).filter((id) => id && id !== sessionId);
+        return [...new Set(ids)];
+      }
+    } catch { /* a partial lineage must not fail the delete: derive it below */ }
+  }
+
+  const { entries } = await collectLineage(ctx, persistence);
+  const childrenOf = new Map();
+  for (const entry of entries.values()) {
+    if (!entry.parentSession) continue;
+    const bucket = childrenOf.get(entry.parentSession);
+    if (bucket) bucket.push(entry.id); else childrenOf.set(entry.parentSession, [entry.id]);
+  }
+  const ids = [];
+  const seen = new Set([sessionId]);
+  const queue = [...(childrenOf.get(sessionId) ?? [])];
+  while (queue.length > 0) {
+    const id = queue.shift();
+    // A corrupt parent link that cycles back must not loop forever.
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+    queue.push(...(childrenOf.get(id) ?? []));
+  }
+  return ids;
+}
+
+/** Workspace-record session ids: the second way a child's parent can resolve. */
+function collectRegistrySessionIds(registry) {
+  const ids = new Set();
+  const entities = registry?.entities;
+  if (entities) {
+    for (const entity of entities.values()) {
+      for (const sid of entity.record?.sessionIds ?? []) ids.add(sid);
+    }
+  }
+  return ids;
+}
+
+/** Byte size of a session log, or undefined when no such file exists. */
+async function logFileSize(path) {
+  if (!path) return undefined;
+  try {
+    const info = await stat(path);
+    return info.isFile() ? info.size : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The display row for one child session.
+ *
+ * WHY A SIZE FALLBACK EXISTS: `sizeBytes` is a field of the persistence
+ * listing only — the kernel's `sessionQuery.listSessions()` projects
+ * `{ header, live, persisted }` and carries no size at all — so on a host that
+ * HAS sessionQuery (the normal case) every row would otherwise report
+ * `fileSize: null` and the panel could not show a single size. The fallback
+ * measures ONLY the rows this report is about to return (never the whole
+ * store), and a session with no log stays `null` rather than claiming 0 bytes.
+ */
+async function childInfo(ctx, persistence, projectionCache, entry) {
+  const cached = readCachedSessionFacts(projectionCache, entry.header);
+  const headerTitle = typeof entry.header.title === 'string' && entry.header.title && entry.header.title !== entry.id
+    ? entry.header.title
+    : undefined;
+  const sizeBytes = typeof entry.sizeBytes === 'number'
+    ? entry.sizeBytes
+    : await logFileSize(entry.logPath ?? await resolveSessionLogPath(persistence, entry.id));
+  return {
+    id: entry.id,
+    title: headerTitle ?? cached.title ?? null,
+    fileSize: typeof sizeBytes === 'number' ? sizeBytes : null,
+    createdAt: typeof entry.header.createdAt === 'number' ? entry.header.createdAt : null,
+    delegationDepth: entry.delegationDepth,
+    live: isSessionLive(ctx, entry.id),
+  };
+}
+
+/**
+ * Build the /children report: sub-sessions grouped under the parent they name,
+ * and orphans grouped under a parent id that resolves to nothing (neither a log
+ * nor a workspace-registry session id) so the panel can render its "残壳" rows.
+ * `sessionIds` narrows the report to those parents; omitting it reports the
+ * whole store.
+ * @returns {Promise<{groups: object, orphans: object, scannedAt: number,
+ *   sessionCount: number, degraded?: true}>}
+ */
+async function buildChildrenReport(ctx, persistence, sessionIds) {
+  const { entries, degraded } = await collectLineage(ctx, persistence);
+  const report = { groups: {}, orphans: {}, scannedAt: Date.now(), sessionCount: entries.size };
+  if (degraded) return { ...report, degraded: true };
+
+  const filter = Array.isArray(sessionIds) ? new Set(normalizeSessionIds(sessionIds)) : undefined;
+  const registryIds = collectRegistrySessionIds(ctx.workspaceRegistry);
+  const projectionCache = ctx.get('sessionProjectionCache');
+  for (const entry of entries.values()) {
+    const parentId = entry.parentSession;
+    if (!parentId) continue;
+    if (filter && !filter.has(parentId)) continue;
+    const bucket = entries.has(parentId) || registryIds.has(parentId) ? report.groups : report.orphans;
+    (bucket[parentId] ??= []).push(await childInfo(ctx, persistence, projectionCache, entry));
+  }
+  for (const bucket of [report.groups, report.orphans]) {
+    for (const list of Object.values(bucket)) {
+      list.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || a.id.localeCompare(b.id));
+    }
+  }
+  return report;
+}
+
+/** Drop one session's live entry from the sessions store, when it has one. */
+function detachLiveSession(ctx, sessionId) {
+  try {
+    const sessions = ctx.get('sessions');
+    const session = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined;
+    if (session !== undefined && typeof sessions.liveEntryFor === 'function') {
+      const entry = sessions.liveEntryFor(session);
+      if (entry && typeof entry.detach === 'function') entry.detach();
+    }
+  } catch {
+    // not live in the store — nothing to detach
+  }
+}
+
+/**
+ * GHOST cleanup: a session with NO log on disk must DISAPPEAR, not come back as
+ * an ungrouped row, so it is detached from every workspace record that lists it.
+ */
+async function detachFromWorkspaces(registry, sessionId) {
+  const entities = registry?.entities;
+  if (!entities) return;
+  for (const entity of entities.values()) {
+    if (entity.record?.sessionIds?.includes(sessionId)) {
+      try {
+        await entity.detachSession(sessionId);
+      } catch {
+        // best effort
+      }
+    }
+  }
+}
+
+/**
+ * Remove one session's durable artifacts: its log directory, its projection
+ * cache record, its live-store entry, and — when no log existed at all — its
+ * workspace slots. Failures propagate: the cascade reports them per id instead
+ * of rolling back.
+ */
+async function removeSessionArtifacts(ctx, persistence, projectionCache, registry, sessionId) {
+  const logPath = await resolveSessionLogPath(persistence, sessionId);
+  if (logPath) {
+    try {
+      const sessionDir = dirname(logPath);
+      await rm(sessionDir, { recursive: true, force: true });
+      const projectDir = dirname(sessionDir);
+      try {
+        const entries = await readdir(projectDir);
+        if (entries.length === 0) await rmdir(projectDir);
+      } catch { /* best effort */ }
+    } catch (error) {
+      throw new Error(`failed to delete session log for '${sessionId}'`, { cause: error });
+    }
+  }
+
+  if (typeof projectionCache?.remove === 'function') await projectionCache.remove(sessionId);
+
+  detachLiveSession(ctx, sessionId);
+  if (!logPath) await detachFromWorkspaces(registry, sessionId);
+}
+
+/**
+ * Purge rows of sessions through the registry's row-aware permanent delete.
+ * Every failure is reported per ROW and never rolled back, and a row that
+ * failed midway contributes the ids it did remove so the counts stay true.
+ * `errors` is an alias of `failed` kept for the released client builds (they
+ * read `.sessionId` and the SESSION_RUNNING `code`).
+ */
+async function purgeSessionRows(registry, sessionIds, excludeIds) {
+  const rows = normalizeSessionIds(sessionIds);
+  const exclude = normalizeSessionIds(excludeIds);
+  const deleted = [];
+  const kept = [];
+  const failed = [];
+  const errors = [];
+  for (const sessionId of rows) {
+    try {
+      const result = await registry.permanentlyDeleteSession(sessionId, { excludeIds: exclude });
+      deleted.push(...result.deleted);
+      kept.push(...result.kept);
+    } catch (error) {
+      deleted.push(...(Array.isArray(error?.deleted) ? error.deleted : []));
+      const message = String(error?.message ?? error);
+      failed.push({ sessionId, message });
+      errors.push({ sessionId, code: error?.code ?? 'ERROR', message });
+    }
+  }
+  return {
+    deletedCount: deleted.length,
+    keptCount: kept.length,
+    deleted,
+    kept,
+    failed,
+    errors,
+    total: rows.length,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /*  Patch: WorkspaceRegistry — unarchive / permanentlyDelete / empty   */
 /* ------------------------------------------------------------------ */
 
@@ -591,131 +1005,100 @@ function patchWorkspaceRegistry(registry, ctx) {
     return unarchive.then(() => dropArchivedMeta(sessionId));
   };
 
+  /** Drop the deleted ids from the archive set and its display metadata. */
+  const purgeArchivedSlots = (sessionIds) => runInQueue(async () => {
+    const state = registry.requireState?.();
+    if (!state) return false;
+    const archived = state.archivedSessionIds ?? [];
+    const removing = sessionIds.filter((id) => archived.includes(id));
+    if (removing.length === 0) return false;
+    // Drop the display facts in the SAME write: a purged session leaves no row
+    // to render, and its archivedMeta entry would otherwise sit in the durable
+    // record forever.
+    const nextMeta = { ...(state.archivedMeta ?? {}) };
+    for (const id of removing) delete nextMeta[id];
+    await registry.setState({
+      ...state,
+      archivedSessionIds: archived.filter((id) => !removing.includes(id)),
+      archivedMeta: nextMeta,
+    });
+    return true;
+  });
+
   // ── permanentlyDeleteSession ──────────────────────────────────────
-  registry.permanentlyDeleteSession = async function permanentlyDeleteSession(sessionId) {
-    // Live-session guard via the agents registry (the proven published-plugin
-    // check): only an ACTIVE agent blocks deletion.
-    const agents = ctx.get('agents');
-    const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined;
-    if (agent !== undefined && agent.status !== 'idle') {
+  //
+  // A ROW, NOT AN ID (v0.5.0): a subagent session is a SIBLING directory of
+  // the session that spawned it and never appears in the workspace registry
+  // (record.sessionIds holds root sessions only), so deleting the parent alone
+  // used to leave its whole child tree behind on disk. One row is therefore
+  // "the session + ALL its descendants, minus excludeIds".
+  //
+  // A live descendant refuses the WHOLE row before a single file is removed,
+  // and excluding a running child does NOT rescue the row: the store must
+  // never be mutated underneath a running agent.
+  //
+  // @param {string} sessionId the row's primary session.
+  // @param {{excludeIds?: string[]}} [options] descendants to spare.
+  // @returns {Promise<{deleted: string[], kept: string[]}>}
+  registry.permanentlyDeleteSession = async function permanentlyDeleteSession(sessionId, options) {
+    // The proven published-plugin liveness check: only an ACTIVE agent blocks
+    // deletion, and it names the offending session.
+    if (isSessionLive(ctx, sessionId)) {
       const err = new Error(`会话正在运行中，请等待结束后再删除`);
       err.code = 'SESSION_RUNNING';
       throw err;
     }
 
-    // Physical deletion via `findLog`: scans ALL project directories directly,
-    // ignoring cwd. If NO log exists on disk (a "ghost" session — an entry in
-    // the workspace registry whose log was never materialized or already
-    // removed), `logFound` stays false.
-    let logFound = false;
-    try {
-      const logPath = await resolveSessionLogPath(persistence, sessionId);
-      if (logPath) {
-        logFound = true;
-        const sessionDir = dirname(logPath);
-        await rm(sessionDir, { recursive: true, force: true });
-        const projectDir = dirname(sessionDir);
-        try {
-          const entries = await readdir(projectDir);
-          if (entries.length === 0) await rmdir(projectDir);
-        } catch { /* best effort */ }
-      }
-    } catch (error) {
-      throw new Error(`failed to delete session log for '${sessionId}'`, { cause: error });
+    const exclude = new Set(normalizeSessionIds(options?.excludeIds));
+    const descendants = await collectDescendantIds(ctx, persistence, sessionId);
+
+    const running = descendants.filter((id) => isSessionLive(ctx, id)).sort();
+    if (running.length > 0) {
+      const err = new Error(`会话正在运行中，请等待结束后再删除（运行中的子会话：${running.join('、')}）`);
+      err.code = 'SESSION_RUNNING';
+      err.runningSessionIds = running;
+      throw err;
     }
 
-    const cache = projectionCache;
-    if (cache && typeof cache.remove === 'function') {
-      await cache.remove(sessionId);
+    const targets = [sessionId, ...descendants.filter((id) => !exclude.has(id))];
+    const kept = descendants.filter((id) => exclude.has(id));
+
+    const deleted = [];
+    let failure;
+    for (const id of targets) {
+      try {
+        await removeSessionArtifacts(ctx, persistence, projectionCache, registry, id);
+      } catch (error) {
+        // NO ROLLBACK: the ids already removed stay removed, and the caller is
+        // handed exactly which ones they were so its counts stay true.
+        error.deleted = deleted;
+        failure = error;
+        break;
+      }
+      deleted.push(id);
     }
 
-    // Remove the session from the LIVE sessions service (the in-memory
-    // session manager). Without this the session lingers as an "ungrouped"
-    // sidebar entry until the next restart — the log is gone, so a restart
-    // reconciles it away, but the user should see it vanish immediately.
-    try {
-      const sessions = ctx.get('sessions');
-      const session = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined;
-      if (session !== undefined && typeof sessions.liveEntryFor === 'function') {
-        const entry = sessions.liveEntryFor(session);
-        if (entry && typeof entry.detach === 'function') {
-          entry.detach();
-        }
-      }
-    } catch {
-      // not live in the store — nothing to detach
+    if (await purgeArchivedSlots(deleted)) {
+      notifyArchivedSessionsChanged(ctx, registry.requireState?.()?.archivedSessionIds ?? []);
     }
-
-    return runInQueue(async () => {
-      const state = registry.requireState?.();
-      if (!state) return;
-
-      let changed = false;
-      if (state.archivedSessionIds.includes(sessionId)) {
-        const newArchived = state.archivedSessionIds.filter((id) => id !== sessionId);
-        // Drop the display facts in the SAME write: a purged session leaves no
-        // row to render, and its archivedMeta entry would otherwise sit in the
-        // durable record forever.
-        const nextMeta = { ...(state.archivedMeta ?? {}) };
-        delete nextMeta[sessionId];
-        await registry.setState({
-          ...state,
-          archivedSessionIds: newArchived,
-          archivedMeta: nextMeta,
-        });
-        changed = true;
-      }
-
-      // GHOST-session cleanup: only when no physical log exists should the
-      // session be detached from every workspace record — it must DISAPPEAR,
-      // not be "restored". A session WITH a log keeps its workspace slot (the
-      // deleted log makes it invisible anyway, and detaching a still-listed
-      // session would surface it under an ungrouped section).
-      if (!logFound) {
-        const entities = registry.entities;
-        if (entities) {
-          for (const entity of entities.values()) {
-            if (entity.record?.sessionIds?.includes(sessionId)) {
-              try {
-                await entity.detachSession(sessionId);
-              } catch {
-                // best effort
-              }
-            }
-          }
-        }
-      }
-
-      if (changed) {
-        const archived = registry.requireState?.()?.archivedSessionIds ?? [];
-        notifyArchivedSessionsChanged(ctx, archived);
-      }
-    });
+    if (failure) throw failure;
+    return { deleted, kept };
   };
 
   // ── emptyArchivedSessions ─────────────────────────────────────────
-  registry.emptyArchivedSessions = async function emptyArchivedSessions() {
-    const state = registry.requireState?.();
-    if (!state || state.archivedSessionIds.length === 0) return { deletedCount: 0 };
+  registry.emptyArchivedSessions = async function emptyArchivedSessions(options) {
+    const archivedIds = [...(registry.requireState?.()?.archivedSessionIds ?? [])];
+    // Every row cascades to its sub-sessions exactly like /purge: emptying the
+    // recycle bin must not leave orphaned child directories behind.
+    const result = await purgeSessionRows(registry, archivedIds, normalizeSessionIds(options?.excludeIds));
 
-    const archivedIds = [...state.archivedSessionIds];
-    let deletedCount = 0;
-    const errors = [];
-
-    for (const sessionId of archivedIds) {
-      try {
-        await registry.permanentlyDeleteSession(sessionId);
-        deletedCount++;
-      } catch (error) {
-        errors.push({ sessionId, message: error.message });
-      }
+    if (result.deletedCount > 0) {
+      notifyArchivedSessionsChanged(ctx, registry.requireState?.()?.archivedSessionIds ?? []);
     }
-
-    if (errors.length > 0 && deletedCount === 0) {
-      throw new Error(`failed to empty recycle bin: ${errors[0].message}`);
+    if (result.failed.length > 0 && result.deletedCount === 0) {
+      throw new Error(`failed to empty recycle bin: ${result.failed[0].message}`);
     }
-
-    return { deletedCount, total: archivedIds.length };
+    return result;
   };
 
   // ── listArchivedSessions ──────────────────────────────────────────
@@ -770,7 +1153,19 @@ function patchWorkspaceRegistry(registry, ctx) {
       }
     }
 
-    const items = archivedIds.map((sessionId) => {
+    // WHY ONE PATH RESOLUTION PER ROW IS BOUNDED: the hover card shows where a
+    // session actually LIVES, and that path is only knowable through the same
+    // resolver ladder permanentlyDeleteSession already walks per session —
+    // findLog (a service query), locate() (pure path computation, no I/O) and,
+    // only when neither answers, a directory scan. It never decodes a log, so
+    // the listing still OPENS nothing (inspect/open stay at zero) and the
+    // store-wide header listing above is still the ONE listing.
+    //
+    // findLog may name a location whose file is already gone (documented cohort
+    // behaviour), while this field promises a path ON DISK: one fileExists
+    // stat — the predicate locate() itself goes through — settles that, and a
+    // session with no log at all reports null instead of a stale location.
+    const items = await Promise.all(archivedIds.map(async (sessionId) => {
       const snapshot = byId.get(sessionId);
       const header = snapshot?.header;
       const ws = workspaceBySession.get(sessionId);
@@ -785,6 +1180,9 @@ function patchWorkspaceRegistry(registry, ctx) {
         || legacyTitle
         || (header?.title && header.title !== sessionId ? header.title : undefined)
         || '未命名会话';
+
+      const resolvedLogPath = await resolveSessionLogPath(persistence, sessionId);
+      const logPath = resolvedLogPath && (await fileExists(resolvedLogPath)) ? resolvedLogPath : null;
 
       return {
         sessionId,
@@ -802,8 +1200,9 @@ function patchWorkspaceRegistry(registry, ctx) {
         // whose checkpoint predates a format upgrade. The client omits the
         // chip for null.
         turnCount: typeof cached.turns === 'number' ? cached.turns : null,
+        logPath,
       };
-    });
+    }));
 
     // 按工作区顺序排列（与左侧 sidebar 一致），每个工作区内按时间降序排列
     const workspaceOrder = [];
@@ -1087,27 +1486,31 @@ function registerRoutes(ctx) {
         ok(res, { sessionId, archivedSessionIds: broadcastArchived() });
       }),
     },
-    // POST purge { sessionIds: [] } — permanently delete the given sessions.
+    // POST children { sessionIds? } — the sub-session rows of the given parent
+    // sessions (the whole store when the list is omitted): children whose
+    // parent resolves, plus the orphans whose parent id resolves to nothing.
+    {
+      kind: 'exact',
+      path: `${ROUTE_PREFIX}/children`,
+      handler: guard(async (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: { code: 'METHOD', message: 'POST only' } });
+        const { sessionIds } = await readBody(req);
+        ok(res, await buildChildrenReport(ctx, persistence, sessionIds));
+      }),
+    },
+    // POST purge { sessionIds: [], excludeIds?: [] } — permanently delete the
+    // given sessions AND their full-depth sub-session trees.
     {
       kind: 'exact',
       path: `${ROUTE_PREFIX}/purge`,
       handler: guard(async (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: { code: 'METHOD', message: 'POST only' } });
-        const { sessionIds } = await readBody(req);
-        const ids = Array.isArray(sessionIds) ? sessionIds.filter((id) => typeof id === 'string' && id) : [];
+        const { sessionIds, excludeIds } = await readBody(req);
+        const ids = normalizeSessionIds(sessionIds);
         if (ids.length === 0) throw httpError(400, 'BAD_REQUEST', 'sessionIds[] is required');
-        const deleted = [];
-        const errors = [];
-        for (const sessionId of ids) {
-          try {
-            await registry?.permanentlyDeleteSession?.(sessionId);
-            deleted.push(sessionId);
-          } catch (error) {
-            errors.push({ sessionId, code: error?.code ?? 'ERROR', message: error?.message ?? String(error) });
-          }
-        }
-        if (deleted.length > 0) broadcastArchived();
-        ok(res, { deletedCount: deleted.length, total: ids.length, errors });
+        const result = await purgeSessionRows(registry, ids, excludeIds);
+        if (result.deletedCount > 0) broadcastArchived();
+        ok(res, result);
       }),
     },
     // GET messages — read and parse messages for session preview modal.
@@ -1337,14 +1740,14 @@ function registerRoutes(ctx) {
         ok(res, { sessionId, messages });
       }),
     },
-    // POST purge-workspace { workspacePath, sessionIds? } — permanently delete all archived sessions in a workspace.
+    // POST purge-workspace { workspacePath, sessionIds?, excludeIds? } — permanently delete all archived sessions in a workspace.
     {
       kind: 'exact',
       path: `${ROUTE_PREFIX}/purge-workspace`,
       handler: guard(async (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: { code: 'METHOD', message: 'POST only' } });
-        const { workspacePath, sessionIds } = await readBody(req);
-        let targetIds = Array.isArray(sessionIds) ? sessionIds : [];
+        const { workspacePath, sessionIds, excludeIds } = await readBody(req);
+        let targetIds = normalizeSessionIds(sessionIds);
 
         if (targetIds.length === 0 && workspacePath) {
           const archived = (await registry?.listArchivedSessions?.()) ?? [];
@@ -1352,31 +1755,22 @@ function registerRoutes(ctx) {
         }
 
         if (targetIds.length === 0) {
-          return ok(res, { deletedCount: 0, total: 0, errors: [] });
+          return ok(res, { deletedCount: 0, keptCount: 0, deleted: [], kept: [], failed: [], errors: [], total: 0 });
         }
 
-        const deleted = [];
-        const errors = [];
-        for (const sessionId of targetIds) {
-          try {
-            await registry?.permanentlyDeleteSession?.(sessionId);
-            deleted.push(sessionId);
-          } catch (error) {
-            errors.push({ sessionId, code: error?.code ?? 'ERROR', message: error?.message ?? String(error) });
-          }
-        }
-
-        if (deleted.length > 0) broadcastArchived();
-        ok(res, { deletedCount: deleted.length, total: targetIds.length, errors });
+        const result = await purgeSessionRows(registry, targetIds, excludeIds);
+        if (result.deletedCount > 0) broadcastArchived();
+        ok(res, result);
       }),
     },
-    // POST empty — permanently delete every archived session.
+    // POST empty { excludeIds? } — permanently delete every archived session.
     {
       kind: 'exact',
       path: `${ROUTE_PREFIX}/empty`,
       handler: guard(async (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: { code: 'METHOD', message: 'POST only' } });
-        const result = (await registry?.emptyArchivedSessions?.()) ?? { deletedCount: 0, total: 0 };
+        const { excludeIds } = await readBody(req);
+        const result = await registry.emptyArchivedSessions({ excludeIds: normalizeSessionIds(excludeIds) });
         broadcastArchived();
         ok(res, result);
       }),
