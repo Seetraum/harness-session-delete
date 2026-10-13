@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [English](CHANGELOG.md) | [中文](CHANGELOG.zh.md)
 
+## [0.5.0] - 2026-10-13
+
+### Added
+
+- **The recycle bin now shows what a session would take with it, and deletes it in one action.** A badge beside the size badge counts that session's sub-session tree at any depth; opening it lists every sub-session with its title, size, time and running state, and permanently deleting the session deletes that whole tree — clear a sub-session's checkbox to keep it. Clearing the recycle bin and deleting a whole workspace cascade the same way. The counts arrive from a background pass, so the panel still opens without reading any session log.
+- **Kept sub-sessions no longer become invisible leftovers.** A sub-session you choose to keep stays on disk, and the panel grows a "deleted main session · N sub-sessions kept" row so it can still be reviewed and removed later, instead of lingering with no way to reach it.
+
+### Changed
+
+- **A session can no longer be permanently deleted while any of its sub-sessions is still running.** The check used to cover only the session's own agent; it now covers the whole sub-session tree, and the refusal names the sub-session that is still running. Unarchiving and restoring are unaffected.
+- **The rows stay readable at any panel width.** Card actions became icon buttons (each with a tooltip and an accessible name), a sub-session's title is now the preview control, and a running sub-session keeps its name at full contrast — only its checkbox and buttons are dimmed. A sub-session's size and age stay in its accessible name when a narrow panel drops the line.
+- **The hover card reads as part of the panel and can be read at leisure.** It opens only when you hover a session's title (hovering the row's buttons leaves their own hints alone), uses the panel's own surface instead of an inverted bubble, and shows the name, the session ID and the session's log file path on disk with the home directory shortened to `~` — all of it selectable. It stays open while the pointer travels onto it, and closes on Escape, scroll, an outside press or a resize; it also goes away together with the session it describes, including when the last listed session is deleted.
+- **Small text is legible again.** The secondary and faintest greys were darkened so every text use clears 4.5:1 on the surface it actually lands on — the panel's footer, group counts, search placeholder, badge numbers and preview close control included — while decorative rules keep the lighter tier.
+
 ## [0.4.4] - 2026-10-12
 
 ### Performance
